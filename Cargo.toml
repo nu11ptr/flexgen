@@ -1,0 +1,17 @@
+[package]
+name = "flexgen"
+version = "0.1.0"
+authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "A flexible, yet simple quote-based code generator for Rust"
+repository = "https://github.com/nu11ptr/flexgen"
+documentation = "https://docs.rs/flexgen"
+readme = "README.md"
+edition = "2021"
+
+[dependencies]
+flexstr = { version = "0.9", features = ["serde"] }
+proc-macro2 = "1"
+quote = "1"
+serde = "1"
+syn = "1"
