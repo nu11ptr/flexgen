@@ -1,9 +1,25 @@
 use std::collections::HashMap;
 
-use flexgen::{expand_vars, CodeFragment, CodeGenError, VarValue};
+use flexgen::{doc_test, expand_vars, CodeFragment, CodeGenError, VarValue};
 use flexstr::{local_str, LocalStr};
 use proc_macro2::TokenStream;
 use quote::quote;
+
+struct DocTest;
+
+impl CodeFragment for DocTest {
+    fn generate(vars: &HashMap<LocalStr, VarValue>) -> Result<TokenStream, CodeGenError> {
+        expand_vars!(vars, fib);
+
+        let test = quote! {
+            assert_eq!(#fib(10), 55);
+            assert_eq!(#fib(1), 1);
+        };
+
+        let doc_test = doc_test!(test).unwrap();
+        Ok(doc_test)
+    }
+}
 
 struct Function;
 
@@ -11,7 +27,10 @@ impl CodeFragment for Function {
     fn generate(vars: &HashMap<LocalStr, VarValue>) -> Result<TokenStream, CodeGenError> {
         expand_vars!(vars, fib);
 
+        let doc_test = DocTest::generate(vars)?;
+
         Ok(quote! {
+            #doc_test
             #[inline]
             fn #fib(n: u64) -> u64 {
                 match n {

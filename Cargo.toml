@@ -10,8 +10,8 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
 flexstr = { version = "0.9", features = ["serde"] }
 proc-macro2 = "1"
 quote = "1"
 serde = "1"
-syn = "1"
