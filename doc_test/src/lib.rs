@@ -8,10 +8,11 @@
 //! use quote::quote;
 //!
 //! // Takes any `TokenStream` as input (but typically `quote` would be used)
-//! let doc_test = quote_doctest::doc_test!(quote! {
+//! let test = quote! {
 //!     assert_eq!(fibonacci(10), 55);
 //!     assert_eq!(fibonacci(1), 1);
-//! }).unwrap();
+//! };
+//! let doc_test = quote_doctest::doc_test!(test).unwrap();
 //!
 //! // Interpolates into a regular `quote` invocation
 //! let actual = quote! {
