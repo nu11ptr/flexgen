@@ -102,11 +102,11 @@ pub enum DocTestOptions {
 
 impl DocTestOptions {
     #[inline]
-    fn config(&self) -> (bool, bool, usize) {
+    fn config(self) -> (bool, bool, usize) {
         match self {
             DocTestOptions::NoFormatOrGenMain => (false, false, 0),
             DocTestOptions::FormatOnly => (true, false, 0),
-            DocTestOptions::FormatAndGenMain(_) => (true, true, 4),
+            DocTestOptions::FormatAndGenMain(strip_indent) => (true, true, strip_indent),
         }
     }
 }
