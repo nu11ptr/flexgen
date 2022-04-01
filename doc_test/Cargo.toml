@@ -1,0 +1,17 @@
+[package]
+name = "quote-doctest"
+version = "0.1.0"
+authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "A simple doctest generator for `quote`"
+repository = "https://github.com/nu11ptr/flexgen/doc_test"
+documentation = "https://docs.rs/quote-doctest"
+readme = "README.md"
+edition = "2021"
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+
+[dev-dependencies]
+temp-env = "0.2"
