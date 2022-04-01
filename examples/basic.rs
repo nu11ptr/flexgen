@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
-use flexgen::{doc_test, expand_vars, CodeFragment, CodeGenError, VarValue};
+use flexgen::{expand_vars, CodeFragment, CodeGenError, VarValue};
 use flexstr::{local_str, LocalStr};
 use proc_macro2::TokenStream;
 use quote::quote;
+use quote_doctest::doc_test;
 
 struct DocTest;
 
@@ -30,6 +31,7 @@ impl CodeFragment for Function {
         let doc_test = DocTest::generate(vars)?;
 
         Ok(quote! {
+            /// This will run a compare between fib inputs and the outputs
             #doc_test
             #[inline]
             fn #fib(n: u64) -> u64 {
