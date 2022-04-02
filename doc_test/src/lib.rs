@@ -61,7 +61,7 @@ mod test_readme {
 
 use std::env;
 use std::error::Error;
-use std::fmt::{Display, Formatter};
+use std::fmt;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -74,100 +74,157 @@ const CODE_MARKER: &str = "```";
 
 /// Creates a doctest from a [TokenStream](proc_macro2::TokenStream). Typically that is all that
 /// is supplied, however, there is an optional parameter of type [DocTestOptions] that can be supplied
-/// to fine tune whether or not rustfmt is used or a main function generated.
+/// to fine tune whether or not formating is used, choose a formatter (either `pretty_please` or `rustfmt`),
+/// or whether a main function generated (it is required if formatting, but one can be specified manually).
 ///
-/// If formatting is done, by default `rustfmt` will attempt to be located in the system path. If the
-/// `RUSTFMT` environment variable is set, however, that will be used instead.
+/// If formatting and using `rustfmt`, by default it will attempt to be located in the system path.
+/// If the `RUSTFMT` environment variable is set, however, that will be used instead.
 #[macro_export]
 macro_rules! doc_test {
     ($tokens:expr) => {
-        $crate::make_doc_test($tokens, $crate::DocTestOptions::FormatAndGenMain(4))
+        $crate::__default_doc_test!($tokens)
     };
     ($tokens:expr, $options:expr) => {
         $crate::make_doc_test($tokens, $options)
     };
 }
 
+#[cfg(feature = "pretty_please")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __default_doc_test {
+    ($tokens:expr) => {
+        $crate::make_doc_test(
+            $tokens,
+            $crate::DocTestOptions::FormatAndGenMain($crate::Formatter::PrettyPlease, 4),
+        )
+    };
+}
+
+#[cfg(not(feature = "pretty_please"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __default_doc_test {
+    ($tokens:expr) => {
+        $crate::make_doc_test(
+            $tokens,
+            $crate::DocTestOptions::FormatAndGenMain($crate::Formatter::RustFmt, 4),
+        )
+    };
+}
+
+/// The formatter used to format source code - either `prettyplease` or the system `rustfmt`
+#[derive(Clone, Copy, Debug)]
+pub enum Formatter {
+    /// Format using `prettyplease` crate
+    #[cfg(feature = "pretty_please")]
+    PrettyPlease,
+    /// Format by calling out to the system `rustfmt`
+    RustFmt,
+}
+
 /// Optional enum passed to [doc_test] for different configuration options
 #[derive(Clone, Copy, Debug)]
 pub enum DocTestOptions {
-    /// TokenStream is not sent to 'rustfmt' and no main function is generated. The doctest will be a single line
+    /// TokenStream is not formatted and no main function is generated. The doctest will be a single line
     NoFormatOrGenMain,
-    /// TokenStream is sent to 'rustfmt' only. The source code must be inside a function or it will cause an error
-    FormatOnly,
-    /// TokenStream is formatted and a main function is generated that is later stripped after formatting.
-    /// The `usize` parameter is the number of indent spaces to be stripped (typically this number should be 4)
-    FormatAndGenMain(usize),
+    /// TokenStream is formatted only by the specified formatter. The source code must be inside a
+    /// function or it will cause an error
+    FormatOnly(Formatter),
+    /// TokenStream is formatted by the specified formatter and a main function is generated that is
+    /// later stripped after formatting. The `usize` parameter is the number of indent spaces to be
+    /// stripped (typically this number should be 4)
+    FormatAndGenMain(Formatter, usize),
 }
 
 impl DocTestOptions {
     #[inline]
-    fn config(self) -> (bool, bool, usize) {
+    fn options(self) -> (Option<Formatter>, bool, usize) {
         match self {
-            DocTestOptions::NoFormatOrGenMain => (false, false, 0),
-            DocTestOptions::FormatOnly => (true, false, 0),
-            DocTestOptions::FormatAndGenMain(strip_indent) => (true, true, strip_indent),
+            DocTestOptions::NoFormatOrGenMain => (None, false, 0),
+            DocTestOptions::FormatOnly(fmt) => (Some(fmt), false, 0),
+            DocTestOptions::FormatAndGenMain(fmt, strip_indent) => (Some(fmt), true, strip_indent),
         }
     }
 }
 
-/// Describes the kind of error that occurred while running 'rustfmt'
+/// Describes the kind of error that occurred while running the formatter
 #[derive(Clone, Copy, Debug)]
-pub enum RustFmtErrorKind {
+pub enum FormatErrorKind {
     /// Unable to find or execute the `rustfmt` program
     UnableToExecRustFmt,
-    /// Unable to write the source code to stdin
+    /// Unable to write the source code to `rustfmt` stdin
     UnableToWriteStdin,
-    /// Issues occurred during the execution of 'rustfmt'
+    /// Issues occurred during the execution of `rustfmt`
     ErrorDuringExec,
-    /// The resulting stdout and stderror from 'rustfmt' could not be converted to UTF8
+    /// The resulting stdout and stderror from `rustfmt` could not be converted to UTF8
     UTF8ConversionError,
-    /// 'rustfmt' encountered an error in the source code it was trying to format. The display string
-    /// contains the output from stderr
+    /// Formatter encountered an error in the source code it was trying to format. The display string
+    /// contains the output from stderr (`rustfmt`) or error display value (`prettyplease`)
     BadSourceCode,
 }
 
-impl Display for RustFmtErrorKind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for FormatErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RustFmtErrorKind::UnableToExecRustFmt => f.write_str("Unable to execute 'rustfmt'"),
-            RustFmtErrorKind::UnableToWriteStdin => {
-                f.write_str("An error occurred while writing to stdin")
+            FormatErrorKind::UnableToExecRustFmt => f.write_str("Unable to execute 'rustfmt'"),
+            FormatErrorKind::UnableToWriteStdin => {
+                f.write_str("An error occurred while writing to 'rustfmt' stdin")
             }
-            RustFmtErrorKind::ErrorDuringExec => {
-                f.write_str("An error occurred while attempting to retrieve rustfmt output")
+            FormatErrorKind::ErrorDuringExec => {
+                f.write_str("An error occurred while attempting to retrieve 'rustfmt' output")
             }
-            RustFmtErrorKind::UTF8ConversionError => {
-                f.write_str("Unable to convert rustfmt output into UTF8")
+            FormatErrorKind::UTF8ConversionError => {
+                f.write_str("Unable to convert 'rustfmt' output into UTF8")
             }
-            RustFmtErrorKind::BadSourceCode => {
-                f.write_str("Rustfmt was unable to parse the source code")
+            FormatErrorKind::BadSourceCode => {
+                f.write_str("Formatter was unable to parse the source code")
             }
         }
     }
 }
 
-/// Error type that is returned when 'doc_test' fails while running 'rustfmt'
+/// Error type that is returned when [doc_test] fails while running the formatter
 #[derive(Clone, Debug)]
-pub struct RustFmtError {
+pub struct FormatError {
     /// Describes the kind of error that occurred
-    pub kind: RustFmtErrorKind,
+    pub kind: FormatErrorKind,
     msg: String,
 }
 
-impl Display for RustFmtError {
+impl fmt::Display for FormatError {
     #[inline]
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{}: {}", self.kind, self.msg))
     }
 }
 
-impl Error for RustFmtError {}
+impl Error for FormatError {}
 
-impl RustFmtError {
+impl FormatError {
     #[inline]
-    fn new(kind: RustFmtErrorKind, msg: String) -> Self {
+    fn new(kind: FormatErrorKind, msg: String) -> Self {
         Self { kind, msg }
+    }
+}
+
+/// Attempts to translate this [TokenStream](proc_macro2::TokenStream) into a [String]. It takes an
+/// optional [Formatter] which formats using either `prettyplease` or `rustfmt`. For `rustfmt`, It defaults
+/// to calling whichever copy it finds via the system path, however, if the `RUSTFMT` environment variable
+/// is set it will use that one. It returns a [String] of the formatted code (or a single line of
+/// unformatted text, if `fmt` is `None`) or a [FormatError] error, if one occurred.
+pub fn tokens_to_string(
+    tokens: TokenStream,
+    fmt: Option<Formatter>,
+) -> Result<String, FormatError> {
+    match fmt {
+        #[cfg(feature = "pretty_please")]
+        Some(Formatter::PrettyPlease) => prettyplz(tokens),
+        Some(Formatter::RustFmt) => {
+            let (src, _) = rustfmt_str(tokens)?;
+            Ok(src)
+        }
+        None => Ok(tokens.to_string()),
     }
 }
 
@@ -175,24 +232,17 @@ impl RustFmtError {
 pub fn make_doc_test(
     mut tokens: TokenStream,
     options: DocTestOptions,
-) -> Result<TokenStream, RustFmtError> {
-    let (fmt, gen_main, strip_indent) = options.config();
+) -> Result<TokenStream, FormatError> {
+    let (fmt, gen_main, strip_indent) = options.options();
 
-    // Surround with main, if needed (and we can't remove it unless we are formatting)
+    // Surround with main, if needed (we can't remove it unless we are formatting)
     if gen_main {
         tokens = quote! {
             fn main() { #tokens }
         };
     }
 
-    // Convert to string source code format
-    let mut src = tokens.to_string();
-
-    // Format it, if requested
-    if fmt {
-        let (source, _) = format_rs_str(&src)?;
-        src = source;
-    }
+    let src = tokens_to_string(tokens, fmt)?;
 
     // Split string source code into lines
     let lines = src.lines();
@@ -207,10 +257,12 @@ pub fn make_doc_test(
     let mut doc_test = Vec::with_capacity(cap);
     let prefix = " ".repeat(strip_indent);
 
+    // Build code from lines
     doc_test.push(CODE_MARKER);
     for mut line in lines {
         // Strip whitespace left over from main
         line = line.strip_prefix(&prefix).unwrap_or(line);
+
         doc_test.push(line);
     }
     // Remove the trailing `}`
@@ -225,10 +277,16 @@ pub fn make_doc_test(
     })
 }
 
-/// Formats a string of Rust source code via rustfmt. It defaults to calling whichever copy it finds
-/// via the system path, however, if the `RUSTFMT` environment variable is set it will use that one.
-/// It returns a tuple of stdout output and stderr output respectively, or an error, if one occurred.
-pub fn format_rs_str(s: impl AsRef<str>) -> Result<(String, String), RustFmtError> {
+#[cfg(feature = "pretty_please")]
+fn prettyplz(tokens: TokenStream) -> Result<String, FormatError> {
+    let f = syn::parse2::<syn::File>(tokens)
+        .map_err(|err| FormatError::new(FormatErrorKind::BadSourceCode, err.to_string()))?;
+    Ok(prettyplease::unparse(&f))
+}
+
+fn rustfmt_str(tokens: TokenStream) -> Result<(String, String), FormatError> {
+    let s = tokens.to_string();
+
     // Use 'rustfmt' specified by the environment var, if specified, else use the default
     let rustfmt = env::var(RUST_FMT_KEY).unwrap_or_else(|_| RUST_FMT.to_string());
 
@@ -238,31 +296,31 @@ pub fn format_rs_str(s: impl AsRef<str>) -> Result<(String, String), RustFmtErro
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| RustFmtError::new(RustFmtErrorKind::UnableToExecRustFmt, err.to_string()))?;
+        .map_err(|err| FormatError::new(FormatErrorKind::UnableToExecRustFmt, err.to_string()))?;
 
     // Get stdin and send our source code to it to be formatted
     // Safety: Can't panic - we captured stdin above
     let mut stdin = proc.stdin.take().unwrap();
     stdin
-        .write_all(s.as_ref().as_bytes())
-        .map_err(|err| RustFmtError::new(RustFmtErrorKind::UnableToWriteStdin, err.to_string()))?;
+        .write_all(s.as_bytes())
+        .map_err(|err| FormatError::new(FormatErrorKind::UnableToWriteStdin, err.to_string()))?;
     // Close stdin
     drop(stdin);
 
     // Parse the results and return stdout/stderr
     let output = proc
         .wait_with_output()
-        .map_err(|err| RustFmtError::new(RustFmtErrorKind::ErrorDuringExec, err.to_string()))?;
+        .map_err(|err| FormatError::new(FormatErrorKind::ErrorDuringExec, err.to_string()))?;
     let stderr = String::from_utf8(output.stderr)
-        .map_err(|err| RustFmtError::new(RustFmtErrorKind::UTF8ConversionError, err.to_string()))?;
+        .map_err(|err| FormatError::new(FormatErrorKind::UTF8ConversionError, err.to_string()))?;
 
     if output.status.success() {
         let stdout = String::from_utf8(output.stdout).map_err(|err| {
-            RustFmtError::new(RustFmtErrorKind::UTF8ConversionError, err.to_string())
+            FormatError::new(FormatErrorKind::UTF8ConversionError, err.to_string())
         })?;
         Ok((stdout, stderr))
     } else {
-        Err(RustFmtError::new(RustFmtErrorKind::BadSourceCode, stderr))
+        Err(FormatError::new(FormatErrorKind::BadSourceCode, stderr))
     }
 }
 
@@ -271,32 +329,43 @@ mod tests {
     use quote::quote;
 
     use crate::{
-        format_rs_str, DocTestOptions, RustFmtError, RustFmtErrorKind, RUST_FMT, RUST_FMT_KEY,
+        tokens_to_string, DocTestOptions, FormatError, FormatErrorKind, Formatter, RUST_FMT,
+        RUST_FMT_KEY,
     };
 
     #[test]
-    fn format_only() {
+    fn rustfmt_format_only() {
         temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
-            let code = quote! {
-                fn main() {
-                    assert_eq!(fibonacci(10), 55);
-                    assert_eq!(fibonacci(1), 1);
-                }
-            };
-
-            let actual = doc_test!(code, DocTestOptions::FormatOnly).unwrap();
-
-            let expected = quote! {
-                #[doc = "```"]
-                #[doc = "fn main() {"]
-                #[doc = "    assert_eq!(fibonacci(10), 55);"]
-                #[doc = "    assert_eq!(fibonacci(1), 1);"]
-                #[doc = "}"]
-                #[doc = "```"]
-            };
-
-            assert_eq!(actual.to_string(), expected.to_string());
+            format_only(Formatter::RustFmt);
         });
+    }
+
+    #[cfg(feature = "pretty_please")]
+    #[test]
+    fn prettyplz_format_only() {
+        format_only(Formatter::PrettyPlease);
+    }
+
+    fn format_only(fmt: Formatter) {
+        let code = quote! {
+            fn main() {
+                assert_eq!(fibonacci(10), 55);
+                assert_eq!(fibonacci(1), 1);
+            }
+        };
+
+        let actual = doc_test!(code, DocTestOptions::FormatOnly(fmt)).unwrap();
+
+        let expected = quote! {
+            #[doc = "```"]
+            #[doc = "fn main() {"]
+            #[doc = "    assert_eq!(fibonacci(10), 55);"]
+            #[doc = "    assert_eq!(fibonacci(1), 1);"]
+            #[doc = "}"]
+            #[doc = "```"]
+        };
+
+        assert_eq!(actual.to_string(), expected.to_string());
     }
 
     #[test]
@@ -319,13 +388,13 @@ mod tests {
     }
 
     #[test]
-    fn bad_rustfmt() {
+    fn bad_path_rustfmt() {
         temp_env::with_var(
             RUST_FMT_KEY,
             Some("this_is_never_going_to_be_a_valid_executable"),
-            || match format_rs_str("") {
-                Err(RustFmtError {
-                    kind: RustFmtErrorKind::UnableToExecRustFmt,
+            || match tokens_to_string(quote! {}, Some(Formatter::RustFmt)) {
+                Err(FormatError {
+                    kind: FormatErrorKind::UnableToExecRustFmt,
                     ..
                 }) => {}
                 _ => panic!("'rustfmt' should have failed due to bad path"),
@@ -334,15 +403,25 @@ mod tests {
     }
 
     #[test]
-    fn bad_source_code() {
+    fn rustfmt_bad_source_code() {
         temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
-            match format_rs_str("blah blah blah") {
-                Err(RustFmtError {
-                    kind: RustFmtErrorKind::BadSourceCode,
-                    ..
-                }) => {}
-                _ => panic!("'rustfmt' should have failed due to bad source code"),
-            }
-        })
+            bad_source_code(Formatter::RustFmt);
+        });
+    }
+
+    #[cfg(feature = "pretty_please")]
+    #[test]
+    fn prettyplz_bad_source_code() {
+        bad_source_code(Formatter::PrettyPlease);
+    }
+
+    fn bad_source_code(fmt: Formatter) {
+        match tokens_to_string(quote! {"blah blah blah"}, Some(fmt)) {
+            Err(FormatError {
+                kind: FormatErrorKind::BadSourceCode,
+                ..
+            }) => {}
+            _ => panic!("'rustfmt' should have failed due to bad source code"),
+        }
     }
 }
