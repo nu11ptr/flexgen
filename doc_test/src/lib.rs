@@ -30,10 +30,10 @@
 //! // This is what is generated:
 //! let expected = quote! {
 //!     #[doc = r" This will run a compare between fib inputs and the outputs"]
-//!     #[doc = "```"]
-//!     #[doc = "assert_eq!(fibonacci(10), 55);"]
-//!     #[doc = "assert_eq!(fibonacci(1), 1);"]
-//!     #[doc = "```"]
+//!     #[doc = " ```"]
+//!     #[doc = " assert_eq!(fibonacci(10), 55);"]
+//!     #[doc = " assert_eq!(fibonacci(1), 1);"]
+//!     #[doc = " ```"]
 //!     fn fibonacci(n: u64) -> u64 {
 //!         match n {
 //!             0 => 1,
@@ -42,7 +42,7 @@
 //!         }
 //!     }
 //! };
-//!     
+//!
 //! assert_eq!(expected.to_string(), actual.to_string());
 //! ```
 
@@ -66,11 +66,12 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use proc_macro2::TokenStream;
-use quote::quote;
+use quote::{quote, ToTokens};
 
 const RUST_FMT: &str = "rustfmt";
 const RUST_FMT_KEY: &str = "RUSTFMT";
-const CODE_MARKER: &str = "```";
+const CODE_MARKER: &str = "/// ```\n";
+const DOC_COMMENT: &str = "/// ";
 
 /// Creates a doctest from a [TokenStream](proc_macro2::TokenStream). Typically that is all that
 /// is supplied, however, there is an optional parameter of type [DocTestOptions] that can be supplied
@@ -89,7 +90,7 @@ macro_rules! doc_test {
     };
 }
 
-#[cfg(feature = "pretty_please")]
+#[cfg(feature = "prettyplease")]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __default_doc_test {
@@ -101,7 +102,7 @@ macro_rules! __default_doc_test {
     };
 }
 
-#[cfg(not(feature = "pretty_please"))]
+#[cfg(not(feature = "prettyplease"))]
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __default_doc_test {
@@ -113,11 +114,32 @@ macro_rules! __default_doc_test {
     };
 }
 
+// Requires 'extra-traits' feature on syn - can just enable if ever needed for debugging
+// #[derive(Debug)]
+struct DocAttrs {
+    docs: Vec<syn::Attribute>,
+}
+
+impl syn::parse::Parse for DocAttrs {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let docs = input.call(syn::Attribute::parse_outer)?;
+        Ok(Self { docs })
+    }
+}
+
+impl ToTokens for DocAttrs {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        for doc in &self.docs {
+            doc.to_tokens(tokens);
+        }
+    }
+}
+
 /// The formatter used to format source code - either `prettyplease` or the system `rustfmt`
 #[derive(Clone, Copy, Debug)]
 pub enum Formatter {
     /// Format using `prettyplease` crate
-    #[cfg(feature = "pretty_please")]
+    #[cfg(feature = "prettyplease")]
     PrettyPlease,
     /// Format by calling out to the system `rustfmt`
     RustFmt,
@@ -218,7 +240,7 @@ pub fn tokens_to_string(
     fmt: Option<Formatter>,
 ) -> Result<String, FormatError> {
     match fmt {
-        #[cfg(feature = "pretty_please")]
+        #[cfg(feature = "prettyplease")]
         Some(Formatter::PrettyPlease) => prettyplz(tokens),
         Some(Formatter::RustFmt) => {
             let (src, _) = rustfmt_str(tokens)?;
@@ -242,42 +264,56 @@ pub fn make_doc_test(
         };
     }
 
+    // Format, if required, and the break into lines
     let src = tokens_to_string(tokens, fmt)?;
+    let lines = to_source_lines(&src, gen_main);
 
+    // Assemble the lines back into a string
+    let prefix = " ".repeat(strip_indent);
+    let doc_test = assemble_doc_test(lines, src.len(), prefix);
+
+    // Parse the new string into document attributes and return a token stream
+    // Safety - these should always succeed since we created them
+    let docs: DocAttrs = syn::parse_str(&doc_test).expect("bad doc attributes");
+    Ok(docs.to_token_stream())
+}
+
+fn to_source_lines(src: &str, gen_main: bool) -> Vec<&str> {
     // Split string source code into lines
     let lines = src.lines();
-    let cap = lines.size_hint().0 + 2;
 
     // Remove `fn main () {`, if we added it
-    let lines = if gen_main {
-        lines.skip(1)
+    if gen_main {
+        // Skip 'fn main {'
+        let mut lines = lines.skip(1).collect::<Vec<_>>();
+        // Remove the trailing `}`
+        lines.pop();
+        lines
     } else {
-        lines.skip(0)
-    };
-    let mut doc_test = Vec::with_capacity(cap);
-    let prefix = " ".repeat(strip_indent);
+        lines.collect()
+    }
+}
+
+fn assemble_doc_test(lines: Vec<&str>, cap: usize, prefix: String) -> String {
+    // Unlikely to be this big, but better than reallocating
+    let mut doc_test = String::with_capacity(cap * 2);
 
     // Build code from lines
-    doc_test.push(CODE_MARKER);
+    doc_test.push_str(CODE_MARKER);
     for mut line in lines {
         // Strip whitespace left over from main
         line = line.strip_prefix(&prefix).unwrap_or(line);
 
-        doc_test.push(line);
+        doc_test.push_str(DOC_COMMENT);
+        doc_test.push_str(line);
+        doc_test.push('\n');
     }
-    // Remove the trailing `}`
-    if gen_main {
-        doc_test.pop();
-    }
-    doc_test.push(CODE_MARKER);
+    doc_test.push_str(CODE_MARKER);
 
-    // Convert into doc attributes
-    Ok(quote! {
-        #( #[doc = #doc_test] )*
-    })
+    doc_test
 }
 
-#[cfg(feature = "pretty_please")]
+#[cfg(feature = "prettyplease")]
 fn prettyplz(tokens: TokenStream) -> Result<String, FormatError> {
     let f = syn::parse2::<syn::File>(tokens)
         .map_err(|err| FormatError::new(FormatErrorKind::BadSourceCode, err.to_string()))?;
@@ -340,7 +376,7 @@ mod tests {
         });
     }
 
-    #[cfg(feature = "pretty_please")]
+    #[cfg(feature = "prettyplease")]
     #[test]
     fn prettyplz_format_only() {
         format_only(Formatter::PrettyPlease);
@@ -357,12 +393,12 @@ mod tests {
         let actual = doc_test!(code, DocTestOptions::FormatOnly(fmt)).unwrap();
 
         let expected = quote! {
-            #[doc = "```"]
-            #[doc = "fn main() {"]
-            #[doc = "    assert_eq!(fibonacci(10), 55);"]
-            #[doc = "    assert_eq!(fibonacci(1), 1);"]
-            #[doc = "}"]
-            #[doc = "```"]
+            #[doc = " ```"]
+            #[doc = " fn main() {"]
+            #[doc = "     assert_eq!(fibonacci(10), 55);"]
+            #[doc = "     assert_eq!(fibonacci(1), 1);"]
+            #[doc = " }"]
+            #[doc = " ```"]
         };
 
         assert_eq!(actual.to_string(), expected.to_string());
@@ -379,9 +415,9 @@ mod tests {
 
         let actual = doc_test!(code, DocTestOptions::NoFormatOrGenMain).unwrap();
         let expected = quote! {
-            #[doc = "```"]
-            #[doc = "fn main () { assert_eq ! (fibonacci (10) , 55) ; assert_eq ! (fibonacci (1) , 1) ; }"]
-            #[doc = "```"]
+            #[doc = " ```"]
+            #[doc = " fn main () { assert_eq ! (fibonacci (10) , 55) ; assert_eq ! (fibonacci (1) , 1) ; }"]
+            #[doc = " ```"]
         };
 
         assert_eq!(actual.to_string(), expected.to_string());
@@ -409,7 +445,7 @@ mod tests {
         });
     }
 
-    #[cfg(feature = "pretty_please")]
+    #[cfg(feature = "prettyplease")]
     #[test]
     fn prettyplz_bad_source_code() {
         bad_source_code(Formatter::PrettyPlease);
