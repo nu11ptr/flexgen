@@ -2,7 +2,10 @@
 
 //! Using the [doc_test] macro, we can take any [TokenStream](proc_macro2::TokenStream) and turn it into
 //! a doctest [TokenStream](proc_macro2::TokenStream) that can be interpolated in any [quote](quote::quote)
-//! macro invocation. The [doc_comment] function takes any string and turns it into a [TokenStream](proc_macro2::TokenStream).
+//! macro invocation.
+//!
+//! The [doc_comment] function takes any string and turns it into one or more comments inside a
+//! [TokenStream](proc_macro2::TokenStream).
 //!
 //! ```
 //! use quote::quote;

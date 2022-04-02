@@ -1,35 +1,53 @@
 # quote-doctest
-A simple doctest generator for [quote](https://github.com/dtolnay/quote)
+
+[![Crate](https://img.shields.io/crates/v/quote-doctest)](https://crates.io/crates/quote-doctest)
+[![Docs](https://docs.rs/quote-doctest/badge.svg)](https://docs.rs/quote-doctest)
+
+A simple doctest and doc comment generator for [quote](https://crates.io/crates/quote)
 
 ## Overview
 
 Currently, quote 
 [does not support](https://docs.rs/quote/latest/quote/macro.quote.html#interpolating-text-inside-of-doc-comments) 
-interpolation inside of comments, which means no doctests. This crate 
-provides a simple mechanism to generate doctests for inclusion in generated code.
+interpolation inside of comments, which means no customized doctests. This 
+crate provides a simple mechanism to generate doctests and doc comments for 
+inclusion in generated code.
 
 ```toml
 [dependencies]
-quote-doctest = "0.1"
+quote-doctest = "0.2"
 ```
 
 ## Example
 
+Using the `doc_test` macro, we can take any `TokenStream` and turn it into
+a doctest `TokenStream` that can be interpolated in any `quote` macro 
+invocation. 
+
+The `doc_comment` function takes any string and turns it into one or more 
+comments inside a `TokenStream`.
+
 ```rust
 use quote::quote;
+use quote_doctest::{doc_comment, doc_test};
 
 fn main() {
     // Takes any `TokenStream` as input (but typically `quote` would be used)
-    let test = quote! {
+    let test = doc_test!(quote! {
+        _comment!("Calling fibonacci with 10 returns 55");
         assert_eq!(fibonacci(10), 55);
+    
+        _blank!();
+        _comment!("Calling fibonacci with 1 simply returns 1");
         assert_eq!(fibonacci(1), 1);
-    };
-    let doc_test = quote_doctest::doc_test!(test).unwrap();
-
+    }).unwrap();
+  
+    let comment = doc_comment("This compares between fib inputs and outputs:\n\n").unwrap();
+  
     // Interpolates into a regular `quote` invocation
     let actual = quote! {
-        /// This will run a compare between fib inputs and the outputs
-        #doc_test
+        #comment
+        #test
         fn fibonacci(n: u64) -> u64 {
             match n {
                 0 => 1,
@@ -38,12 +56,16 @@ fn main() {
             }
         }
     };
-
+  
     // This is what is generated:
     let expected = quote! {
-        /// This will run a compare between fib inputs and the outputs
+        /// This compares between fib inputs and outputs:
+        ///
         /// ```
+        /// // Calling fibonacci with 10 returns 55
         /// assert_eq!(fibonacci(10), 55);
+        ///
+        /// // Calling fibonacci with 1 simply returns 1
         /// assert_eq!(fibonacci(1), 1);
         /// ```
         fn fibonacci(n: u64) -> u64 {
@@ -54,19 +76,19 @@ fn main() {
             }
         }
     };
-    
+  
     assert_eq!(expected.to_string(), actual.to_string());
 }
 ```
 
 ## Notes
-- If generating source code (instead of using in a macro), be aware that 
-  `TokenStream` will render in `#[doc]` attribute format, not as a `///` comment
-  - `rustfmt` nightly has an option to translate these
-- By default, this calls out to `rustfmt` in order to translate this into a 
-  list of lines. Omitting formatting is possible, but the resulting 
-  doctest will be a single `#[doc]` attribute (which will result in poor 
-  looking rustdoc) 
+- It can use both [prettyplease](https://crates.io/crates/prettyplease) 
+  (default) or the system `rustfmt` for formatting the doctests
+    - It honors the `RUSTFMT` environment variable if set (and using `rustfmt`)
+- Since comments and blank lines are whitespace to the parser, marker macros 
+  are used to map out where the comments and blank lines should appear. 
+  These will be replaced by comments and blank lines respectively in the 
+  doctest (as shown in the example above)
 
 ## License
 
