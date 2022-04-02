@@ -18,7 +18,7 @@
 //!     assert_eq!(fibonacci(1), 1);
 //! }).unwrap();
 //!
-//! let comment = doc_comment("This compares between fib inputs and outputs\n\n").unwrap();
+//! let comment = doc_comment("This compares between fib inputs and outputs:\n\n").unwrap();
 //!
 //! // Interpolates into a regular `quote` invocation
 //! let actual = quote! {
@@ -35,15 +35,15 @@
 //!
 //! // This is what is generated:
 //! let expected = quote! {
-//!     #[doc = " This compares between fib inputs and outputs"]
-//!     #[doc = ""]
-//!     #[doc = " ```"]
-//!     #[doc = " // Calling fibonacci with 10 returns 55"]
-//!     #[doc = " assert_eq!(fibonacci(10), 55);"]
-//!     #[doc = ""]
-//!     #[doc = " // Calling fibonacci with 1 simply returns 1"]
-//!     #[doc = " assert_eq!(fibonacci(1), 1);"]
-//!     #[doc = " ```"]
+//!     /// This compares between fib inputs and outputs:
+//!     ///
+//!     /// ```
+//!     /// // Calling fibonacci with 10 returns 55
+//!     /// assert_eq!(fibonacci(10), 55);
+//!     ///
+//!     /// // Calling fibonacci with 1 simply returns 1
+//!     /// assert_eq!(fibonacci(1), 1);
+//!     /// ```
 //!     fn fibonacci(n: u64) -> u64 {
 //!         match n {
 //!             0 => 1,
@@ -78,10 +78,11 @@ use quote::{quote, ToTokens};
 
 const RUST_FMT: &str = "rustfmt";
 const RUST_FMT_KEY: &str = "RUSTFMT";
-const CODE_MARKER: &str = "/// ```\n";
-const DOC_COMMENT: &str = "/// ";
-const EMPTY_DOC_COMMENT: &str = "///";
-const COMMENT: &str = "// ";
+const CODE_MARKER: &str = "#[doc = r\" ```\"]\n";
+const DOC_COMMENT_START: &str = "#[doc = r\" ";
+const DOC_COMMENT_END: &str = "\"]\n";
+const EMPTY_DOC_COMMENT: &str = "#[doc = r\"\"]\n";
+const COMMENT_START: &str = "// ";
 const EMPTY_COMMENT: &str = "//";
 
 const BLANK_IDENT: &str = "_blank";
@@ -316,11 +317,11 @@ pub fn tokens_to_string(tokens: TokenStream, fmt: Option<Formatter>) -> Result<S
 ///
 /// let actual = doc_comment("this\nwill be\n\nmultiple comments\n\n").unwrap();
 /// let expected = quote! {
-///     #[doc = " this"]
-///     #[doc = " will be"]
-///     #[doc = ""]
-///     #[doc = " multiple comments"]
-///     #[doc = ""]
+///     /// this
+///     /// will be
+///     ///
+///     /// multiple comments
+///     ///
 /// };
 ///
 /// assert_eq!(expected.to_string(), actual.to_string());
@@ -335,11 +336,10 @@ pub fn doc_comment(comment: impl AsRef<str>) -> Result<TokenStream, Error> {
         if comm.is_empty() {
             buffer.push_str(EMPTY_DOC_COMMENT);
         } else {
-            buffer.push_str(DOC_COMMENT);
+            buffer.push_str(DOC_COMMENT_START);
             buffer.push_str(comm);
+            buffer.push_str(DOC_COMMENT_END);
         }
-
-        buffer.push('\n');
     }
 
     // Parse into doc attrs and then return final token stream
@@ -418,7 +418,6 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
                 if m.tokens.is_empty() {
                     // Same as a blank line really
                     buffer.push_str(EMPTY_DOC_COMMENT);
-                    buffer.push('\n');
 
                     return Ok(());
                 // Actual comments present
@@ -430,16 +429,16 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
 
                     // Insert one comment per line
                     for comm in comment.lines() {
-                        buffer.push_str(DOC_COMMENT);
+                        buffer.push_str(DOC_COMMENT_START);
 
                         if !comm.is_empty() {
-                            buffer.push_str(COMMENT);
+                            buffer.push_str(COMMENT_START);
                             buffer.push_str(comm);
                         } else {
                             buffer.push_str(EMPTY_COMMENT);
                         }
 
-                        buffer.push('\n');
+                        buffer.push_str(DOC_COMMENT_END);
                     }
 
                     return Ok(());
@@ -473,9 +472,9 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
     // Allow it to drop through to here from any level of the if above if not matched
 
     // Regular line processing
-    buffer.push_str(DOC_COMMENT);
+    buffer.push_str(DOC_COMMENT_START);
     buffer.push_str(line);
-    buffer.push('\n');
+    buffer.push_str(DOC_COMMENT_END);
     Ok(())
 }
 
@@ -558,12 +557,12 @@ mod tests {
         let actual = doc_test!(code, DocTestOptions::FormatOnly(fmt)).unwrap();
 
         let expected = quote! {
-            #[doc = " ```"]
-            #[doc = " fn main() {"]
-            #[doc = "     assert_eq!(fibonacci(10), 55);"]
-            #[doc = "     assert_eq!(fibonacci(1), 1);"]
-            #[doc = " }"]
-            #[doc = " ```"]
+            /// ```
+            /// fn main() {
+            ///     assert_eq!(fibonacci(10), 55);
+            ///     assert_eq!(fibonacci(1), 1);
+            /// }
+            /// ```
         };
 
         assert_eq!(expected.to_string(), actual.to_string());
@@ -580,9 +579,9 @@ mod tests {
 
         let actual = doc_test!(code, DocTestOptions::NoFormatOrGenMain).unwrap();
         let expected = quote! {
-            #[doc = " ```"]
-            #[doc = " fn main () { assert_eq ! (fibonacci (10) , 55) ; assert_eq ! (fibonacci (1) , 1) ; }"]
-            #[doc = " ```"]
+            /// ```
+            /// fn main () { assert_eq ! (fibonacci (10) , 55) ; assert_eq ! (fibonacci (1) , 1) ; }
+            /// ```
         };
 
         assert_eq!(expected.to_string(), actual.to_string());
@@ -656,14 +655,14 @@ mod tests {
         .unwrap();
 
         let expected = quote! {
-            #[doc = " ```"]
-            #[doc = " assert_eq!(fibonacci(10), 55);"]
-            #[doc = ""]
-            #[doc = " // first line"]
-            #[doc = " //"]
-            #[doc = " // second line"]
-            #[doc = " assert_eq!(fibonacci(1), 1);"]
-            #[doc = " ```"]
+            /// ```
+            /// assert_eq!(fibonacci(10), 55);
+            ///
+            /// // first line
+            /// //
+            /// // second line
+            /// assert_eq!(fibonacci(1), 1);
+            /// ```
         };
 
         assert_eq!(expected.to_string(), actual.to_string());
@@ -701,13 +700,13 @@ mod tests {
         .unwrap();
 
         let expected = quote! {
-            #[doc = " ```"]
-            #[doc = " assert_eq!(fibonacci(10), 55);"]
-            #[doc = ""]
-            #[doc = " assert_eq!(fibonacci(1), 1);"]
-            #[doc = ""]
-            #[doc = ""]
-            #[doc = " ```"]
+            /// ```
+            /// assert_eq!(fibonacci(10), 55);
+            ///
+            /// assert_eq!(fibonacci(1), 1);
+            ///
+            ///
+            /// ```
         };
 
         assert_eq!(expected.to_string(), actual.to_string());

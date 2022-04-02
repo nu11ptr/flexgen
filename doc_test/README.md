@@ -41,11 +41,11 @@ fn main() {
 
     // This is what is generated:
     let expected = quote! {
-        #[doc = r" This will run a compare between fib inputs and the outputs"]
-        #[doc = " ```"]
-        #[doc = " assert_eq!(fibonacci(10), 55);"]
-        #[doc = " assert_eq!(fibonacci(1), 1);"]
-        #[doc = " ```"]
+        /// This will run a compare between fib inputs and the outputs
+        /// ```
+        /// assert_eq!(fibonacci(10), 55);
+        /// assert_eq!(fibonacci(1), 1);
+        /// ```
         fn fibonacci(n: u64) -> u64 {
             match n {
                 0 => 1,
