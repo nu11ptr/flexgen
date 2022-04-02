@@ -6,20 +6,19 @@
 //!
 //! ```
 //! use quote::quote;
-//! use quote_doctest::{_blank, _comment, doc_comment, doc_test};
+//! use quote_doctest::{doc_comment, doc_test};
 //!
 //! // Takes any `TokenStream` as input (but typically `quote` would be used)
-//! let test = quote! {
+//! let test = doc_test!(quote! {
 //!     _comment!("Calling fibonacci with 10 returns 55");
 //!     assert_eq!(fibonacci(10), 55);
 //!
 //!     _blank!();
 //!     _comment!("Calling fibonacci with 1 simply returns 1");
 //!     assert_eq!(fibonacci(1), 1);
-//! };
-//! let test = doc_test!(test).unwrap();
+//! }).unwrap();
 //!
-//! let comment = doc_comment("This will run a compare between fib inputs and the outputs\n\n").unwrap();
+//! let comment = doc_comment("This compares between fib inputs and outputs\n\n").unwrap();
 //!
 //! // Interpolates into a regular `quote` invocation
 //! let actual = quote! {
@@ -36,7 +35,7 @@
 //!
 //! // This is what is generated:
 //! let expected = quote! {
-//!     #[doc = " This will run a compare between fib inputs and the outputs"]
+//!     #[doc = " This compares between fib inputs and outputs"]
 //!     #[doc = ""]
 //!     #[doc = " ```"]
 //!     #[doc = " // Calling fibonacci with 10 returns 55"]
