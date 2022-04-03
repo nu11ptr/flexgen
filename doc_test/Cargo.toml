@@ -1,12 +1,12 @@
 [package]
 name = "quote-doctest"
-version = "0.2.1"
+version = "0.2.2"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A simple doctest generator for quote"
 repository = "https://github.com/nu11ptr/flexgen/tree/master/doc_test"
 documentation = "https://docs.rs/quote-doctest"
-keywords = ["syn", "macros"]
+keywords = ["syn", "macros", "quote", "doctest"]
 categories = ["development-tools::procedural-macro-helpers"]
 readme = "README.md"
 edition = "2021"

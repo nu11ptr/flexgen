@@ -89,8 +89,6 @@ fn main() {
   are used to map out where the comments and blank lines should appear. 
   These will be replaced by comments and blank lines respectively in the 
   doctest (as shown in the example above)
-- BUG: *Please be aware that raw strings do not currently work correctly 
-  inside a doc test or comment* 
 
 ## License
 

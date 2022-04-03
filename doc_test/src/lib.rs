@@ -84,8 +84,8 @@ const RUST_FMT_KEY: &str = "RUSTFMT";
 const CODE_MARKER: &str = "#[doc = r\" ```\"]\n";
 const DOC_COMMENT_START: &str = "#[doc = r\" ";
 const DOC_COMMENT_END: &str = "\"]\n";
-const RAW_DOC_COMMENT_START: &str = "#[doc = r#\" ";
-const RAW_DOC_COMMENT_END: &str = "\"#]\n";
+const RAW_DOC_COMMENT_START: &str = "#[doc = r";
+const RAW_DOC_COMMENT_END: &str = "]\n";
 const EMPTY_DOC_COMMENT: &str = "#[doc = r\"\"]\n";
 const COMMENT_START: &str = "// ";
 const EMPTY_COMMENT: &str = "//";
@@ -309,6 +309,126 @@ pub fn tokens_to_string(tokens: TokenStream, fmt: Option<Formatter>) -> Result<S
     }
 }
 
+// We don't have to account for byte strings for either regular or raw because the same handling
+// handles both types (ie. in raw strings the 'b' comes before the 'r')
+enum StringState {
+    NotInString,
+    InString,
+    InStringMaybeInEscape,
+    MaybeStartingRawString(u8),
+    InRawString(u8),
+    MaybeEndingRawString(u8, u8),
+}
+
+impl StringState {
+    #[inline]
+    fn dbl_quote_seen(self) -> (Self, u8) {
+        use StringState::*;
+
+        match self {
+            // Only way to get into a regular string
+            NotInString => (InString, 1),
+            // Only exit for a regular string
+            InString => (NotInString, 0),
+            InStringMaybeInEscape => (InString, 0),
+            // Only way to get into a raw string
+            MaybeStartingRawString(pounds) => (InRawString(pounds), pounds + 1),
+            // Exit possibility #1 for raw string
+            InRawString(0) => (NotInString, 0),
+            InRawString(pounds) => (MaybeEndingRawString(pounds, 0), 0),
+            MaybeEndingRawString(pounds, _) => (InRawString(pounds), 0),
+        }
+    }
+
+    #[inline]
+    fn r_seen(self) -> Self {
+        use StringState::*;
+
+        match self {
+            NotInString => MaybeStartingRawString(0),
+            InStringMaybeInEscape => InString,
+            MaybeStartingRawString(_) => NotInString,
+            MaybeEndingRawString(pounds, _) => InRawString(pounds),
+            state => state,
+        }
+    }
+
+    #[inline]
+    fn pound_seen(self) -> Self {
+        use StringState::*;
+
+        match self {
+            InStringMaybeInEscape => InString,
+            MaybeStartingRawString(pounds) => MaybeStartingRawString(pounds + 1),
+            // Exit possibility #2 for raw string
+            MaybeEndingRawString(pounds, seen) if pounds == (seen + 1) => NotInString,
+            MaybeEndingRawString(pounds, seen) => MaybeEndingRawString(pounds, seen + 1),
+            state => state,
+        }
+    }
+
+    #[inline]
+    fn backslash_seen(self) -> Self {
+        use StringState::*;
+
+        match self {
+            InString => InStringMaybeInEscape,
+            InStringMaybeInEscape => InString,
+            MaybeStartingRawString(_) => NotInString,
+            MaybeEndingRawString(pounds, _) => InRawString(pounds),
+            state => state,
+        }
+    }
+
+    #[inline]
+    fn regular_char(self) -> Self {
+        use StringState::*;
+
+        match self {
+            InStringMaybeInEscape => InString,
+            MaybeStartingRawString(_) => NotInString,
+            MaybeEndingRawString(pounds, _) => InRawString(pounds),
+            state => state,
+        }
+    }
+}
+
+fn encode_doc_comment(buffer: &mut String, line: &str, f: impl FnOnce(&mut String, &str)) {
+    let mut max_pounds = 0;
+    let mut str_state = StringState::NotInString;
+
+    // Calculate max # of pounds we need on our raw string
+    for ch in line.chars() {
+        match ch {
+            '"' => {
+                let (state, pounds) = str_state.dbl_quote_seen();
+                str_state = state;
+                max_pounds = cmp::max(max_pounds, pounds);
+            }
+            'r' => str_state = str_state.r_seen(),
+            '#' => str_state = str_state.pound_seen(),
+            '\\' => str_state = str_state.backslash_seen(),
+            _ => str_state = str_state.regular_char(),
+        }
+    }
+
+    // Start raw string
+    buffer.push_str(RAW_DOC_COMMENT_START);
+    for _ in 0..max_pounds {
+        buffer.push('#');
+    }
+    buffer.push_str("\" ");
+
+    f(buffer, line);
+
+    // End raw string
+    buffer.push('"');
+    for _ in 0..max_pounds {
+        buffer.push('#');
+    }
+    buffer.push_str(RAW_DOC_COMMENT_END);
+}
+
 /// Creates a doc comment for interpolation into a [TokenStream](proc_macro2::TokenStream). It takes
 /// a string as input, splits it by line, and inserts one doc comment per line.
 ///
@@ -340,14 +460,8 @@ pub fn doc_comment(comment: impl AsRef<str>) -> Result<TokenStream, Error> {
     for comm in comment.lines() {
         if comm.is_empty() {
             buffer.push_str(EMPTY_DOC_COMMENT);
-        } else if comm.contains('"') {
-            buffer.push_str(RAW_DOC_COMMENT_START);
-            buffer.push_str(comm);
-            buffer.push_str(RAW_DOC_COMMENT_END);
         } else {
-            buffer.push_str(DOC_COMMENT_START);
-            buffer.push_str(comm);
-            buffer.push_str(DOC_COMMENT_END);
+            encode_doc_comment(&mut buffer, comm, |buffer, comm| buffer.push_str(comm));
         }
     }
 
@@ -439,23 +553,14 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
 
                     // Insert one comment per line
                     for comm in comment.lines() {
-                        if comm.contains('"') {
-                            buffer.push_str(RAW_DOC_COMMENT_START);
-                            buffer.push_str(COMMENT_START);
-                            buffer.push_str(comm);
-                            buffer.push_str(RAW_DOC_COMMENT_END);
-                        } else {
-                            buffer.push_str(DOC_COMMENT_START);
-
+                        encode_doc_comment(buffer, comm, |buffer, comm| {
                             if !comm.is_empty() {
                                 buffer.push_str(COMMENT_START);
                                 buffer.push_str(comm);
                             } else {
                                 buffer.push_str(EMPTY_COMMENT);
                             }
-
-                            buffer.push_str(DOC_COMMENT_END);
-                        }
+                        });
                     }
 
                     return Ok(());
@@ -489,15 +594,7 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
     // Allow it to drop through to here from any level of the if above if not matched
 
     // Regular line processing
-    if line.contains('"') {
-        buffer.push_str(RAW_DOC_COMMENT_START);
-        buffer.push_str(line);
-        buffer.push_str(RAW_DOC_COMMENT_END);
-    } else {
-        buffer.push_str(DOC_COMMENT_START);
-        buffer.push_str(line);
-        buffer.push_str(DOC_COMMENT_END);
-    }
+    encode_doc_comment(buffer, line, |buffer, line| buffer.push_str(line));
     Ok(())
 }
 
@@ -751,9 +848,28 @@ mod tests {
     fn inner_string(fmt: Formatter) {
         let code = quote! {
             println!("inner string");
-            println!("inner \"quote");
-            // Raw strings don't work yet (we need to add one more pound for every # inner raw uses)
-            //println!(r#"inner raw string"#);
+            // Escaped double quote
+            println!("inner \"");
+            println!("inner \r");
+            println!("inner \\");
+
+            println!(r"inner raw string");
+            println!(b"inner byte string");
+            println!(br"inner raw byte string");
+
+            println!(r#"inner raw string"#);
+            println!(br#"inner byte raw string"#);
+
+            // Multiple
+            println!(r#"{}"#, "multiple");
+
+            // Raw entry fake out
+            r();
+
+            // Raw exit fake out 1
+            println!(r##"inner raw " string"##);
+            // Raw exit fake out 2
+            println!(r##"inner raw "# string"##);
         };
 
         let actual = doc_test!(
@@ -765,7 +881,18 @@ mod tests {
         let expected = quote! {
             /// ```
             /// println!("inner string");
-            /// println!("inner \"quote");
+            /// println!("inner \"");
+            /// println!("inner \r");
+            /// println!("inner \\");
+            /// println!(r"inner raw string");
+            /// println!(b"inner byte string");
+            /// println!(br"inner raw byte string");
+            /// println!(r#"inner raw string"#);
+            /// println!(br#"inner byte raw string"#);
+            /// println!(r#"{}"#, "multiple");
+            /// r();
+            /// println!(r##"inner raw " string"##);
+            /// println!(r##"inner raw "# string"##);
             /// ```
         };
 
