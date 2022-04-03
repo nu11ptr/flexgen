@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
-use flexstr::{SharedStr, ToSharedStr};
+use flexstr::{shared_str, SharedStr, ToSharedStr};
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 
@@ -12,20 +12,74 @@ const IDENT: &str = "$ident$";
 
 // *** Expand Vars ***
 
-#[macro_export]
-macro_rules! expand_vars {
-    ($vars:ident, $($var:ident),+) => {
-        $(let $var = {
-            let var = flexstr::SharedStr::from_ref(&stringify!($var));
-            let value = $vars.get(&var).ok_or($crate::CodeGenError::MissingVar(var))?;
+#[doc(hidden)]
+#[inline]
+pub fn import_var<'vars>(
+    vars: &'vars Vars,
+    var: &'static str,
+) -> Result<&'vars VarValue, CodeGenError> {
+    let var = shared_str!(var);
+    let value = vars.get(&var).ok_or(CodeGenError::MissingVar(var))?;
 
-            match value {
-                $crate::VarItem::Single(value) => value,
-                $crate::VarItem::List(_) => {
-                    return Err($crate::CodeGenError::WrongItem);
-                }
-            }
-        };)+
+    match value {
+        VarItem::Single(value) => Ok(value),
+        VarItem::List(_) => Err(CodeGenError::WrongItem),
+    }
+}
+
+#[macro_export]
+macro_rules! import_vars {
+    // Allow trailing comma
+    ($vars:ident => $($var:ident,)+) => { $crate::import_varss!($vars, $($var),+) };
+    ($vars:ident => $($var:ident),+) => {
+        $(
+            let $var = $crate::import_var($vars, stringify!($var))?;
+        )+
+    };
+}
+
+#[doc(hidden)]
+#[inline]
+pub fn import_list<'vars>(
+    vars: &'vars Vars,
+    var: &'static str,
+) -> Result<&'vars [VarValue], CodeGenError> {
+    let var = shared_str!(var);
+    let value = vars.get(&var).ok_or(CodeGenError::MissingVar(var))?;
+
+    match value {
+        VarItem::List(value) => Ok(value),
+        VarItem::Single(_) => Err(CodeGenError::WrongItem),
+    }
+}
+
+#[macro_export]
+macro_rules! import_lists {
+    // Allow trailing comma
+    ($vars:ident => $($var:ident,)+) => { $crate::import_lists!($vars, $($var),+) };
+    ($vars:ident => $($var:ident),+) => {
+        $(
+            let $var = $crate::import_list($vars, stringify!($var))?;
+        )+
+    };
+}
+
+#[macro_export]
+macro_rules! register_fragments {
+    (%item%, $v:ident) => { () };
+    (%count%, $($v:ident),+) => { [$($crate::register_fragments!(%item%, $v)),+].len() };
+    // Allow trailing comma
+    ($($fragment:ident,)+) => { $crate::register_fragments!($($fragment),+) };
+    ($($fragment:ident),+) => {
+        {
+            let cap = $crate::register_fragments!(%count%, $($fragment),+);
+            let mut map = $crate::CodeFragments::with_capacity(cap);
+
+            $(
+                map.insert(flexstr::shared_str!(stringify!($fragment)), &$fragment);
+            )+
+            map
+        }
     };
 }
 
@@ -140,8 +194,12 @@ impl ToTokens for VarValue {
 
 // *** Types ***
 
+/// A hashmap of variables for interpolation into [CodeFragments]
 pub type Vars = HashMap<SharedStr, VarItem>;
 
+pub type CodeFragments = HashMap<SharedStr, &'static (dyn CodeFragment + Send + Sync)>;
+
+/// A single code fragment - the smallest unit of work
 pub trait CodeFragment {
-    fn generate(vars: &Vars) -> Result<TokenStream, CodeGenError>;
+    fn generate(&self, vars: &Vars) -> Result<TokenStream, CodeGenError>;
 }

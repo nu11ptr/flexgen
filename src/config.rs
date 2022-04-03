@@ -22,9 +22,9 @@ pub struct Common {
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
 pub struct File {
     pub path: PathBuf,
-    pub template_list: SharedStr,
+    pub fragment_list: SharedStr,
     #[serde(default)]
-    pub template_list_exceptions: Vec<SharedStr>,
+    pub fragment_list_exceptions: Vec<SharedStr>,
     pub vars: Vars,
 }
 
@@ -32,7 +32,7 @@ pub struct File {
 pub struct Config {
     #[serde(default)]
     pub common: Common,
-    pub template_lists: HashMap<SharedStr, Vec<SharedStr>>,
+    pub fragment_lists: HashMap<SharedStr, Vec<SharedStr>>,
     pub files: HashMap<SharedStr, File>,
 }
 
@@ -81,14 +81,14 @@ mod tests {
         suffix = "$ident$Str"
         list = [ "FlexStr", true, 5, "$ident$Str" ]
                 
-        [template_lists]
+        [fragment_lists]
         impl = [ "impl_struct", "impl_core_ref" ]
         impl_struct = [ "empty", "from_ref" ]
         
         [files.str]
         path = "strings/generated/std_str.rs"
-        template_list = "impl"
-        template_list_exceptions = [ "impl_core_ref" ]
+        fragment_list = "impl"
+        fragment_list_exceptions = [ "impl_core_ref" ]
         
         [files.str.vars]
         str_type = "str"
@@ -121,7 +121,7 @@ mod tests {
         }
     }
 
-    fn template_lists() -> HashMap<SharedStr, Vec<SharedStr>> {
+    fn fragment_lists() -> HashMap<SharedStr, Vec<SharedStr>> {
         let mut lists = HashMap::new();
         lists.insert(
             shared_str!("impl"),
@@ -143,8 +143,8 @@ mod tests {
 
         let files_str = File {
             path: PathBuf::from("strings/generated/std_str.rs"),
-            template_list: shared_str!("impl"),
-            template_list_exceptions: vec![shared_str!("impl_core_ref")],
+            fragment_list: shared_str!("impl"),
+            fragment_list_exceptions: vec![shared_str!("impl_core_ref")],
             vars: str_vars,
         };
 
@@ -158,7 +158,7 @@ mod tests {
         let actual = Config::from_reader(CONFIG.as_bytes()).unwrap();
         let expected = Config {
             common: common(),
-            template_lists: template_lists(),
+            fragment_lists: fragment_lists(),
             files: files(),
         };
 
