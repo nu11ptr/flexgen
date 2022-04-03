@@ -84,6 +84,8 @@ const RUST_FMT_KEY: &str = "RUSTFMT";
 const CODE_MARKER: &str = "#[doc = r\" ```\"]\n";
 const DOC_COMMENT_START: &str = "#[doc = r\" ";
 const DOC_COMMENT_END: &str = "\"]\n";
+const RAW_DOC_COMMENT_START: &str = "#[doc = r#\" ";
+const RAW_DOC_COMMENT_END: &str = "\"#]\n";
 const EMPTY_DOC_COMMENT: &str = "#[doc = r\"\"]\n";
 const COMMENT_START: &str = "// ";
 const EMPTY_COMMENT: &str = "//";
@@ -338,6 +340,10 @@ pub fn doc_comment(comment: impl AsRef<str>) -> Result<TokenStream, Error> {
     for comm in comment.lines() {
         if comm.is_empty() {
             buffer.push_str(EMPTY_DOC_COMMENT);
+        } else if comm.contains('"') {
+            buffer.push_str(RAW_DOC_COMMENT_START);
+            buffer.push_str(comm);
+            buffer.push_str(RAW_DOC_COMMENT_END);
         } else {
             buffer.push_str(DOC_COMMENT_START);
             buffer.push_str(comm);
@@ -419,8 +425,9 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
             if m.path.is_ident(COMMENT_IDENT) {
                 // Blank comment
                 if m.tokens.is_empty() {
-                    // Same as a blank line really
-                    buffer.push_str(EMPTY_DOC_COMMENT);
+                    buffer.push_str(DOC_COMMENT_START);
+                    buffer.push_str(EMPTY_COMMENT);
+                    buffer.push_str(DOC_COMMENT_END);
 
                     return Ok(());
                 // Actual comments present
@@ -432,16 +439,23 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
 
                     // Insert one comment per line
                     for comm in comment.lines() {
-                        buffer.push_str(DOC_COMMENT_START);
-
-                        if !comm.is_empty() {
+                        if comm.contains('"') {
+                            buffer.push_str(RAW_DOC_COMMENT_START);
                             buffer.push_str(COMMENT_START);
                             buffer.push_str(comm);
+                            buffer.push_str(RAW_DOC_COMMENT_END);
                         } else {
-                            buffer.push_str(EMPTY_COMMENT);
-                        }
+                            buffer.push_str(DOC_COMMENT_START);
 
-                        buffer.push_str(DOC_COMMENT_END);
+                            if !comm.is_empty() {
+                                buffer.push_str(COMMENT_START);
+                                buffer.push_str(comm);
+                            } else {
+                                buffer.push_str(EMPTY_COMMENT);
+                            }
+
+                            buffer.push_str(DOC_COMMENT_END);
+                        }
                     }
 
                     return Ok(());
@@ -475,9 +489,15 @@ fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
     // Allow it to drop through to here from any level of the if above if not matched
 
     // Regular line processing
-    buffer.push_str(DOC_COMMENT_START);
-    buffer.push_str(line);
-    buffer.push_str(DOC_COMMENT_END);
+    if line.contains('"') {
+        buffer.push_str(RAW_DOC_COMMENT_START);
+        buffer.push_str(line);
+        buffer.push_str(RAW_DOC_COMMENT_END);
+    } else {
+        buffer.push_str(DOC_COMMENT_START);
+        buffer.push_str(line);
+        buffer.push_str(DOC_COMMENT_END);
+    }
     Ok(())
 }
 
@@ -660,7 +680,7 @@ mod tests {
         let expected = quote! {
             /// ```
             /// assert_eq!(fibonacci(10), 55);
-            ///
+            /// //
             /// // first line
             /// //
             /// // second line
@@ -709,6 +729,43 @@ mod tests {
             /// assert_eq!(fibonacci(1), 1);
             ///
             ///
+            /// ```
+        };
+
+        assert_eq!(expected.to_string(), actual.to_string());
+    }
+
+    #[test]
+    fn rustfmt_inner_string() {
+        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
+            inner_string(Formatter::RustFmt);
+        });
+    }
+
+    #[cfg(feature = "prettyplease")]
+    #[test]
+    fn prettyplz_inner_string() {
+        inner_string(Formatter::PrettyPlease);
+    }
+
+    fn inner_string(fmt: Formatter) {
+        let code = quote! {
+            println!("inner string");
+            println!("inner \"quote");
+            // Raw strings don't work yet (we need to add one more pound for every # inner raw uses)
+            //println!(r#"inner raw string"#);
+        };
+
+        let actual = doc_test!(
+            code,
+            DocTestOptions::FormatAndGenMain(fmt, FORMATTER_INDENT)
+        )
+        .unwrap();
+
+        let expected = quote! {
+            /// ```
+            /// println!("inner string");
+            /// println!("inner \"quote");
             /// ```
         };
 
