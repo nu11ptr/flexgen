@@ -5,6 +5,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use flexstr::{shared_str, SharedStr, ToSharedStr};
+use heck::ToSnakeCase;
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 
@@ -64,6 +65,12 @@ macro_rules! import_lists {
     };
 }
 
+#[doc(hidden)]
+#[inline]
+pub fn make_key(s: &'static str) -> SharedStr {
+    SharedStr::from_ref(&s.to_snake_case())
+}
+
 #[macro_export]
 macro_rules! register_fragments {
     (%item%, $v:ident) => { () };
@@ -76,7 +83,7 @@ macro_rules! register_fragments {
             let mut map = $crate::CodeFragments::with_capacity(cap);
 
             $(
-                map.insert(flexstr::shared_str!(stringify!($fragment)), &$fragment);
+                map.insert($crate::make_key(stringify!($fragment)), &$fragment);
             )+
             map
         }
@@ -192,7 +199,49 @@ impl ToTokens for VarValue {
     }
 }
 
-// *** Types ***
+// *** FragmentItem ***
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum FragmentItem {
+    // Must be first so Serde uses this one always
+    Fragment(SharedStr),
+    FragmentListRef(SharedStr),
+}
+
+// *** Fragment Lists ***
+
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
+pub struct FragmentLists(HashMap<SharedStr, Vec<FragmentItem>>);
+
+impl FragmentLists {
+    pub fn build(&self) -> Self {
+        let mut lists = HashMap::with_capacity(self.0.len());
+
+        for (key, fragments) in &self.0 {
+            let mut new_fragments = Vec::with_capacity(fragments.len());
+
+            for fragment in fragments {
+                match fragment {
+                    FragmentItem::Fragment(s) | FragmentItem::FragmentListRef(s) => {
+                        // If it is also a key, that means it is a list reference
+                        if self.0.contains_key(s) {
+                            new_fragments.push(FragmentItem::FragmentListRef(s.clone()));
+                        } else {
+                            new_fragments.push(FragmentItem::Fragment(s.clone()));
+                        }
+                    }
+                }
+            }
+
+            lists.insert(key.clone(), new_fragments);
+        }
+
+        Self(lists)
+    }
+}
+
+// *** Misc. Types ***
 
 /// A hashmap of variables for interpolation into [CodeFragments]
 pub type Vars = HashMap<SharedStr, VarItem>;

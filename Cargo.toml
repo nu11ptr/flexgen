@@ -12,6 +12,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 flexstr = { version = "0.9", features = ["serde"] }
+heck = "0.4"
 proc-macro2 = "1"
 quote = "1"
 quote-doctest = { path = "doc_test"}

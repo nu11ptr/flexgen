@@ -5,7 +5,7 @@ use std::{fs, io};
 
 use flexstr::SharedStr;
 
-use crate::Vars;
+use crate::{FragmentLists, Vars};
 
 const BUF_SIZE: usize = u16::MAX as usize;
 
@@ -32,7 +32,7 @@ pub struct File {
 pub struct Config {
     #[serde(default)]
     pub common: Common,
-    pub fragment_lists: HashMap<SharedStr, Vec<SharedStr>>,
+    pub fragment_lists: FragmentLists,
     pub files: HashMap<SharedStr, File>,
 }
 
@@ -43,7 +43,8 @@ impl Config {
         let mut buffer = String::with_capacity(BUF_SIZE);
         reader.read_to_string(&mut buffer)?;
 
-        let config: Config = toml::from_str(&buffer)?;
+        let mut config: Config = toml::from_str(&buffer)?;
+        config.fragment_lists = config.fragment_lists.build();
         Ok(config)
     }
 
@@ -67,7 +68,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::config::{Common, Config, File};
-    use crate::{CodeItem, VarItem, VarValue};
+    use crate::{CodeItem, FragmentItem, FragmentLists, VarItem, VarValue};
 
     const CONFIG: &str = r#"
         [common]
@@ -121,17 +122,25 @@ mod tests {
         }
     }
 
-    fn fragment_lists() -> HashMap<SharedStr, Vec<SharedStr>> {
+    fn fragment_lists() -> FragmentLists {
+        use FragmentItem::*;
+
         let mut lists = HashMap::new();
         lists.insert(
             shared_str!("impl"),
-            vec![shared_str!("impl_struct"), shared_str!("impl_core_ref")],
+            vec![
+                FragmentListRef(shared_str!("impl_struct")),
+                Fragment(shared_str!("impl_core_ref")),
+            ],
         );
         lists.insert(
             shared_str!("impl_struct"),
-            vec![shared_str!("empty"), shared_str!("from_ref")],
+            vec![
+                Fragment(shared_str!("empty")),
+                Fragment(shared_str!("from_ref")),
+            ],
         );
-        lists
+        FragmentLists(lists)
     }
 
     fn files() -> HashMap<SharedStr, File> {
