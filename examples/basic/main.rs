@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use flexgen::{expand_vars, CodeFragment, CodeGenError, VarValue};
-use flexstr::{local_str, LocalStr};
+use flexgen::{expand_vars, CodeFragment, CodeGenError, VarItem, VarValue, Vars};
+use flexstr::shared_str;
 use proc_macro2::TokenStream;
 use quote::quote;
 use quote_doctest::doc_test;
@@ -9,12 +9,13 @@ use quote_doctest::doc_test;
 struct DocTest;
 
 impl CodeFragment for DocTest {
-    fn generate(vars: &HashMap<LocalStr, VarValue>) -> Result<TokenStream, CodeGenError> {
+    fn generate(vars: &Vars) -> Result<TokenStream, CodeGenError> {
         expand_vars!(vars, fib);
 
         let test = quote! {
             assert_eq!(#fib(10), 55);
             assert_eq!(#fib(1), 1);
+            println!("Fib: {}", #fib(12));
         };
 
         let doc_test = doc_test!(test).unwrap();
@@ -25,7 +26,7 @@ impl CodeFragment for DocTest {
 struct Function;
 
 impl CodeFragment for Function {
-    fn generate(vars: &HashMap<LocalStr, VarValue>) -> Result<TokenStream, CodeGenError> {
+    fn generate(vars: &Vars) -> Result<TokenStream, CodeGenError> {
         expand_vars!(vars, fib);
 
         let doc_test = DocTest::generate(vars)?;
@@ -47,7 +48,10 @@ impl CodeFragment for Function {
 
 fn main() {
     let mut map = HashMap::new();
-    map.insert(local_str!("fib"), VarValue::Ident(local_str!("fibonacci")));
+    map.insert(
+        shared_str!("fib"),
+        VarItem::Single(VarValue::CodeItem("$ident$fibonacci".parse().unwrap())),
+    );
 
     let fib = Function::generate(&map).unwrap().to_string();
     println!("{}", fib);

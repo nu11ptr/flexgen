@@ -10,8 +10,15 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
+anyhow = "1"
 flexstr = { version = "0.9", features = ["serde"] }
 proc-macro2 = "1"
 quote = "1"
 quote-doctest = { path = "doc_test"}
-serde = "1"
+serde = {version = "1", features = ["derive"]}
+syn = "1"
+thiserror = "1"
+toml = "0.5"
+
+[dev-dependencies]
+pretty_assertions = "1"
