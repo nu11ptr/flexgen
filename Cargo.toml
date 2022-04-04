@@ -16,6 +16,7 @@ heck = "0.4"
 proc-macro2 = "1"
 quote = "1"
 quote-doctest = { path = "doc_test"}
+rayon = "1.5"
 serde = {version = "1", features = ["derive"]}
 syn = "1"
 thiserror = "1"

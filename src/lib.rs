@@ -1,69 +1,15 @@
 pub mod config;
+pub mod var;
 
 use std::collections::HashMap;
-use std::fmt;
-use std::str::FromStr;
 
-use flexstr::{shared_str, SharedStr, ToSharedStr};
+use flexstr::SharedStr;
 use heck::ToSnakeCase;
 use proc_macro2::TokenStream;
-use quote::ToTokens;
+use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 
-const IDENT: &str = "$ident$";
-
-// *** Expand Vars ***
-
-#[doc(hidden)]
-#[inline]
-pub fn import_var<'vars>(
-    vars: &'vars Vars,
-    var: &'static str,
-) -> Result<&'vars VarValue, CodeGenError> {
-    let var = shared_str!(var);
-    let value = vars.get(&var).ok_or(CodeGenError::MissingVar(var))?;
-
-    match value {
-        VarItem::Single(value) => Ok(value),
-        VarItem::List(_) => Err(CodeGenError::WrongItem),
-    }
-}
-
-#[macro_export]
-macro_rules! import_vars {
-    // Allow trailing comma
-    ($vars:ident => $($var:ident,)+) => { $crate::import_varss!($vars, $($var),+) };
-    ($vars:ident => $($var:ident),+) => {
-        $(
-            let $var = $crate::import_var($vars, stringify!($var))?;
-        )+
-    };
-}
-
-#[doc(hidden)]
-#[inline]
-pub fn import_list<'vars>(
-    vars: &'vars Vars,
-    var: &'static str,
-) -> Result<&'vars [VarValue], CodeGenError> {
-    let var = shared_str!(var);
-    let value = vars.get(&var).ok_or(CodeGenError::MissingVar(var))?;
-
-    match value {
-        VarItem::List(value) => Ok(value),
-        VarItem::Single(_) => Err(CodeGenError::WrongItem),
-    }
-}
-
-#[macro_export]
-macro_rules! import_lists {
-    // Allow trailing comma
-    ($vars:ident => $($var:ident,)+) => { $crate::import_lists!($vars, $($var),+) };
-    ($vars:ident => $($var:ident),+) => {
-        $(
-            let $var = $crate::import_list($vars, stringify!($var))?;
-        )+
-    };
-}
+use crate::config::Config;
+use crate::var::TokenVars;
 
 #[doc(hidden)]
 #[inline]
@@ -96,6 +42,8 @@ macro_rules! register_fragments {
 pub enum CodeGenError {
     #[error("The specified variable '{0}' was missing.")]
     MissingVar(SharedStr),
+    #[error("The specified code fragment '{0}' was missing.")]
+    MissingFragment(SharedStr),
     #[error("The specified item was a 'list' instead of a 'single' item (or vice versa)")]
     WrongItem,
     #[error("The code item could not be parsed: {0}")]
@@ -104,99 +52,6 @@ pub enum CodeGenError {
     NotCodeItem(SharedStr),
     #[error("There was an error while deserializing: {0}")]
     DeserializeError(String),
-}
-
-// *** SynItem ***
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum CodeItem {
-    Ident(syn::Ident),
-}
-
-impl FromStr for CodeItem {
-    type Err = CodeGenError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if matches!(s.find(IDENT), Some(idx) if idx == 0) {
-            let ident = syn::parse_str::<syn::Ident>(&s[IDENT.len()..])?;
-            Ok(CodeItem::Ident(ident))
-        } else {
-            Err(CodeGenError::NotCodeItem(s.to_shared_str()))
-        }
-    }
-}
-
-impl ToTokens for CodeItem {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            CodeItem::Ident(ident) => ident.to_tokens(tokens),
-        }
-    }
-}
-
-struct SynItemVisitor;
-
-impl<'de> serde::de::Visitor<'de> for SynItemVisitor {
-    type Value = CodeItem;
-
-    #[inline]
-    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("a string with a special prefix")
-    }
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        v.parse()
-            .map_err(|_| serde::de::Error::custom("Error deserializing 'str'"))
-    }
-
-    fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-    where
-        E: serde::de::Error,
-    {
-        v.parse()
-            .map_err(|_| serde::de::Error::custom("Error deserializing 'String'"))
-    }
-}
-
-impl<'de> serde::de::Deserialize<'de> for CodeItem {
-    #[inline]
-    fn deserialize<D: serde::de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_str(SynItemVisitor)
-    }
-}
-
-// *** VarItem ***
-
-#[derive(Clone, Debug, serde::Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum VarItem {
-    List(Vec<VarValue>),
-    Single(VarValue),
-}
-
-// *** VarValue ***
-
-#[derive(Clone, Debug, serde::Deserialize, PartialEq)]
-#[serde(untagged)]
-pub enum VarValue {
-    Number(i64),
-    Bool(bool),
-    CodeItem(CodeItem),
-    String(SharedStr),
-}
-
-impl ToTokens for VarValue {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        match self {
-            VarValue::CodeItem(s) => s.to_tokens(tokens),
-            VarValue::String(s) => s.to_tokens(tokens),
-            VarValue::Number(n) => n.to_tokens(tokens),
-            VarValue::Bool(b) => b.to_tokens(tokens),
-        }
-    }
 }
 
 // *** FragmentItem ***
@@ -239,16 +94,89 @@ impl FragmentLists {
 
         Self(lists)
     }
+
+    pub fn validate(&self, code: &CodeFragments) -> Result<(), CodeGenError> {
+        for fragments in self.0.values() {
+            let missing = fragments.iter().find(|&fragment| match fragment {
+                FragmentItem::Fragment(fragment) => !code.contains_key(fragment),
+                FragmentItem::FragmentListRef(_) => false,
+            });
+
+            if let Some(FragmentItem::Fragment(fragment)) = missing {
+                return Err(CodeGenError::MissingFragment(fragment.clone()));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+// *** Execute ***
+
+fn execute_file_to_string(
+    _name: &SharedStr,
+    _fragments: &CodeFragments,
+    _config: &Config,
+) -> Result<(SharedStr, String), CodeGenError> {
+    todo!()
+}
+
+fn execute_file(
+    _name: &SharedStr,
+    _fragments: &CodeFragments,
+    _config: &Config,
+) -> Result<(), CodeGenError> {
+    todo!()
+}
+
+fn do_execute(
+    to_file: bool,
+    code: &CodeFragments,
+    config: &Config,
+) -> Result<HashMap<SharedStr, String>, CodeGenError> {
+    // TODO: Move this into config from_reader? (but then it needs `CodeFragments`
+    // Make sure every item in fragment list also has a code fragment
+    config.fragment_lists.validate(code)?;
+
+    let names: Vec<_> = config.files.keys().collect();
+
+    let results = if to_file {
+        let _results: Vec<Result<_, _>> = names
+            .par_iter()
+            .map(|&name| execute_file(name, code, config))
+            .collect();
+
+        HashMap::new()
+    } else {
+        let _results: Vec<Result<_, _>> = names
+            .par_iter()
+            .map(|&name| execute_file(name, code, config))
+            .collect();
+
+        let map_results = HashMap::with_capacity(names.len());
+
+        map_results
+    };
+
+    Ok(results)
+}
+
+pub fn execute_to_strings(
+    code: &CodeFragments,
+    config: &Config,
+) -> Result<HashMap<SharedStr, String>, CodeGenError> {
+    do_execute(false, code, config)
+}
+
+pub fn execute(code: &CodeFragments, config: &Config) -> Result<(), CodeGenError> {
+    do_execute(true, code, config).map(|_| ())
 }
 
 // *** Misc. Types ***
-
-/// A hashmap of variables for interpolation into [CodeFragments]
-pub type Vars = HashMap<SharedStr, VarItem>;
 
 pub type CodeFragments = HashMap<SharedStr, &'static (dyn CodeFragment + Send + Sync)>;
 
 /// A single code fragment - the smallest unit of work
 pub trait CodeFragment {
-    fn generate(&self, vars: &Vars) -> Result<TokenStream, CodeGenError>;
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError>;
 }

@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 
-use flexgen::{
-    import_vars, register_fragments, CodeFragment, CodeGenError, VarItem, VarValue, Vars,
-};
+use flexgen::var::{CodeValue, TokenItem, TokenValue, TokenVars, Vars};
+use flexgen::{import_vars, register_fragments, CodeFragment, CodeGenError};
 use flexstr::shared_str;
 use proc_macro2::TokenStream;
 use quote::quote;
@@ -11,7 +10,7 @@ use quote_doctest::doc_test;
 struct DocTest;
 
 impl CodeFragment for DocTest {
-    fn generate(&self, vars: &Vars) -> Result<TokenStream, CodeGenError> {
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
         import_vars!(vars => fib);
 
         let test = quote! {
@@ -28,7 +27,7 @@ impl CodeFragment for DocTest {
 struct Function;
 
 impl CodeFragment for Function {
-    fn generate(&self, vars: &Vars) -> Result<TokenStream, CodeGenError> {
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
         import_vars!(vars => fib);
 
         let doc_test = DocTest.generate(vars)?;
@@ -54,7 +53,7 @@ fn main() {
     let mut map = HashMap::new();
     map.insert(
         shared_str!("fib"),
-        VarItem::Single(VarValue::CodeItem("$ident$fibonacci".parse().unwrap())),
+        TokenItem::Single(TokenValue::new(CodeValue::Ident(shared_str!("fibonacci")))?),
     );
 
     let fib = Function.generate(&map).unwrap().to_string();

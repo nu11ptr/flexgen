@@ -5,7 +5,8 @@ use std::{fs, io};
 
 use flexstr::SharedStr;
 
-use crate::{FragmentLists, Vars};
+use crate::var::Vars;
+use crate::FragmentLists;
 
 const BUF_SIZE: usize = u16::MAX as usize;
 
@@ -68,7 +69,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::config::{Common, Config, File};
-    use crate::{CodeItem, FragmentItem, FragmentLists, VarItem, VarValue};
+    use crate::var::{CodeValue, VarItem, VarValue};
+    use crate::{FragmentItem, FragmentLists};
 
     const CONFIG: &str = r#"
         [common]
@@ -107,7 +109,7 @@ mod tests {
         let count = VarValue::Number(5);
         vars.insert(shared_str!("count"), VarItem::Single(count.clone()));
 
-        let suffix = VarValue::CodeItem(CodeItem::from_str("$ident$Str").unwrap());
+        let suffix = VarValue::CodeValue(CodeValue::from_str("$ident$Str").unwrap());
         vars.insert(shared_str!("suffix"), VarItem::Single(suffix.clone()));
 
         vars.insert(
