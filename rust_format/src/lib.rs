@@ -83,21 +83,22 @@ impl Default for Edition {
 pub enum Error {
     /// An I/O related error occurred
     IOError(io::Error),
-    /// An error occurred while attempting to parse the source code - most likely bad syntax
-    #[cfg(feature = "prettyplease")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
-    SynError(syn::Error),
     /// The response of formatting was not valid UTF8
     UTFConversionError(string::FromUtf8Error),
     /// The source code has bad syntax and could not be formatted
     BadSourceCode(String),
 }
 
-// TODO: Replace with a real implementation
 impl fmt::Display for Error {
-    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <Self as fmt::Debug>::fmt(self, f)
+        match self {
+            Error::IOError(err) => <io::Error as fmt::Display>::fmt(err, f),
+            Error::UTFConversionError(err) => <string::FromUtf8Error as fmt::Display>::fmt(err, f),
+            Error::BadSourceCode(cause) => {
+                f.write_str("An error occurred while formatting the source code: ")?;
+                f.write_str(cause)
+            }
+        }
     }
 }
 
@@ -106,14 +107,14 @@ impl std::error::Error for Error {}
 impl From<io::Error> for Error {
     #[inline]
     fn from(err: io::Error) -> Self {
-        Self::IOError(err)
+        Error::IOError(err)
     }
 }
 
 impl From<string::FromUtf8Error> for Error {
     #[inline]
     fn from(err: string::FromUtf8Error) -> Self {
-        Self::UTFConversionError(err)
+        Error::UTFConversionError(err)
     }
 }
 
@@ -122,7 +123,7 @@ impl From<string::FromUtf8Error> for Error {
 impl From<syn::Error> for Error {
     #[inline]
     fn from(err: syn::Error) -> Self {
-        Self::SynError(err)
+        Error::BadSourceCode(err.to_string())
     }
 }
 
@@ -189,11 +190,16 @@ pub trait Formatter {
 /// This formatter uses `rustfmt` for formatting source code
 pub struct RustFmt {
     rustfmt: OsString,
-    config_str: OsString,
+    config_str: Option<OsString>,
     edition: Edition,
 }
 
 impl RustFmt {
+    #[inline]
+    fn new() -> Self {
+        Self::build(None as Option<Config<&OsStr, &OsStr>>)
+    }
+
     /// Creates a new instance of the formatter from the given configuration
     #[inline]
     pub fn from_config<K, V>(config: Config<K, V>) -> Self
@@ -223,25 +229,30 @@ impl RustFmt {
         }
     }
 
-    fn build_config_str<K, V>(cfg_options: HashMap<K, V>) -> OsString
+    fn build_config_str<K, V>(cfg_options: HashMap<K, V>) -> Option<OsString>
     where
         K: Default + AsRef<OsStr>,
         V: Default + AsRef<OsStr>,
     {
-        // Random # that should hold a few options
-        let mut options = OsString::with_capacity(512);
-        let iter = cfg_options.iter();
+        if !cfg_options.is_empty() {
+            // Random # that should hold a few options
+            let mut options = OsString::with_capacity(512);
+            let iter = cfg_options.iter();
 
-        for (idx, (k, v)) in iter.enumerate() {
-            if idx > 0 {
-                options.push(",");
+            for (idx, (k, v)) in iter.enumerate() {
+                // Build a comma separated list but only between items (no trailing comma)
+                if idx > 0 {
+                    options.push(",");
+                }
+                options.push(k);
+                options.push("=");
+                options.push(v);
             }
-            options.push(k);
-            options.push("=");
-            options.push(v);
-        }
 
-        options
+            Some(options)
+        } else {
+            None
+        }
     }
 
     fn build_args<'a, P>(&'a self, path: Option<&'a P>) -> Vec<&'a OsStr>
@@ -260,9 +271,9 @@ impl RustFmt {
         args.push("--edition".as_ref());
         args.push(self.edition.as_os_str());
 
-        if !self.config_str.is_empty() {
+        if let Some(config_str) = &self.config_str {
             args.push("--config".as_ref());
-            args.push(&self.config_str);
+            args.push(config_str);
         }
 
         args
@@ -272,7 +283,7 @@ impl RustFmt {
 impl Default for RustFmt {
     #[inline]
     fn default() -> Self {
-        Self::build(None as Option<Config<&OsStr, &OsStr>>)
+        Self::new()
     }
 }
 
