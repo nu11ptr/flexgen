@@ -6,7 +6,7 @@
 //! [rustfmt](https://crates.io/crates/rustfmt-nightly) and
 //! [prettyplease](https://crates.io/crates/prettyplease).
 
-use std::fmt::Debug;
+use std::default::Default;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::path::Path;
@@ -29,7 +29,19 @@ pub enum Edition {
     Rust2021,
 }
 
+impl Edition {
+    #[inline]
+    fn as_str(self) -> &'static str {
+        match self {
+            Edition::Rust2015 => "2015",
+            Edition::Rust2018 => "2018",
+            Edition::Rust2021 => "2021",
+        }
+    }
+}
+
 impl Default for Edition {
+    #[inline]
     fn default() -> Self {
         Edition::Rust2021
     }
@@ -56,7 +68,7 @@ pub enum Error {
 impl fmt::Display for Error {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        <Self as Debug>::fmt(self, f)
+        <Self as fmt::Debug>::fmt(self, f)
     }
 }
 
@@ -94,7 +106,7 @@ impl From<syn::Error> for Error {
 #[derive(Clone, Debug, Default)]
 pub struct Config<I, K, V>
 where
-    I: FromIterator<(K, V)>,
+    I: Default + IntoIterator,
     K: AsRef<str>,
     V: AsRef<str>,
 {
@@ -105,11 +117,12 @@ where
 
 impl<I, K, V> Config<I, K, V>
 where
-    I: FromIterator<(K, V)>,
+    I: Default + IntoIterator,
     K: AsRef<str>,
     V: AsRef<str>,
 {
     /// Creates a new configuration from the given edition and options
+    #[inline]
     pub fn new(edition: Edition, options: I) -> Self {
         Self {
             edition,
@@ -126,11 +139,11 @@ where
 pub trait Formatter {
     /// Format the given string and return the results in another `String`. An error is returned
     /// if any issues occur during formatting
-    fn format_str(source: impl AsRef<str>) -> Result<String, Error>;
+    fn format_str(&self, source: impl AsRef<str>) -> Result<String, Error>;
 
     /// Format the given file specified hte path and overwrite the file with the results. An error
     /// is returned if any issues occur during formatting
-    fn format_file(path: impl AsRef<Path>) -> Result<(), Error> {
+    fn format_file(&self, path: impl AsRef<Path>) -> Result<(), Error> {
         // Read our file into a string
         let mut file = fs::File::open(path.as_ref())?;
         let len = file.metadata()?.len();
@@ -140,7 +153,7 @@ pub trait Formatter {
         // Close the file now that we are done with it
         drop(file);
 
-        let result = Self::format_str(source)?;
+        let result = self.format_str(source)?;
 
         let mut file = fs::File::create(path)?;
         file.write_all(result.as_bytes())?;
@@ -152,26 +165,80 @@ pub trait Formatter {
     #[cfg(feature = "token_stream")]
     #[cfg_attr(docsrs, doc(cfg(feature = "token_stream")))]
     #[inline]
-    fn format_tokens(tokens: proc_macro2::TokenStream) -> Result<String, Error> {
-        Self::format_str(tokens.to_string())
+    fn format_tokens(&self, tokens: proc_macro2::TokenStream) -> Result<String, Error> {
+        self.format_str(tokens.to_string())
     }
 }
 
 // *** Rust Fmt ***
 
 /// This formatter uses `rustfmt` for formatting source code
-pub struct RustFmt;
+pub struct RustFmt<I, K, V>
+where
+    I: Default + IntoIterator,
+    K: AsRef<str>,
+    V: AsRef<str>,
+{
+    config: Config<I, K, V>,
+}
 
-impl Formatter for RustFmt {
-    fn format_str(source: impl AsRef<str>) -> Result<String, Error> {
+impl<'a, I, K, V> RustFmt<I, K, V>
+where
+    I: Copy + Default + IntoIterator<Item = (&'a K, &'a V)>,
+    K: Default + AsRef<str> + 'a,
+    V: Default + AsRef<str> + 'a,
+{
+    /// Creates a new instance of the formatter from the given configuration
+    #[inline]
+    pub fn new(config: Option<Config<I, K, V>>) -> Self {
+        let config = config.unwrap_or_default();
+        Self { config }
+    }
+
+    fn build_config_str(&self) -> String {
+        // Random # that should hold a few options
+        let mut options = String::with_capacity(512);
+        let iter = self.config.options.into_iter();
+
+        for (idx, (k, v)) in iter.enumerate() {
+            if idx > 0 {
+                options.push(',');
+            }
+            options.push_str(k.as_ref());
+            options.push('=');
+            options.push_str(v.as_ref());
+        }
+
+        options
+    }
+}
+
+impl<'a, I, K, V> Formatter for RustFmt<I, K, V>
+where
+    I: Copy + Default + IntoIterator<Item = (&'a K, &'a V)>,
+    K: Default + AsRef<str> + 'a,
+    V: Default + AsRef<str> + 'a,
+{
+    fn format_str(&self, source: impl AsRef<str>) -> Result<String, Error> {
         // Use 'rustfmt' specified by the environment var, if specified, else use the default
         let rustfmt = env::var(RUST_FMT_KEY).unwrap_or_else(|_| RUST_FMT.to_string());
+
+        let mut args = Vec::with_capacity(4);
+        args.push("--edition");
+        args.push(self.config.edition.as_str());
+
+        let config_str = self.build_config_str();
+        if !config_str.is_empty() {
+            args.push("--config");
+            args.push(&config_str);
+        }
 
         // Launch rustfmt
         let mut proc = Command::new(&rustfmt)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .args(args)
             .spawn()?;
 
         // Get stdin and send our source code to it to be formatted
@@ -205,7 +272,7 @@ pub struct PrettyPlease;
 #[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
 impl Formatter for PrettyPlease {
     #[inline]
-    fn format_str(source: impl AsRef<str>) -> Result<String, Error> {
+    fn format_str(&self, source: impl AsRef<str>) -> Result<String, Error> {
         let f = syn::parse_file(source.as_ref())?;
         Ok(prettyplease::unparse(&f))
     }
@@ -213,7 +280,7 @@ impl Formatter for PrettyPlease {
     #[inline]
     #[cfg(feature = "token_stream")]
     #[cfg_attr(docsrs, doc(cfg(feature = "token_stream")))]
-    fn format_tokens(tokens: proc_macro2::TokenStream) -> Result<String, Error> {
+    fn format_tokens(&self, tokens: proc_macro2::TokenStream) -> Result<String, Error> {
         let f = syn::parse2::<syn::File>(tokens)?;
         Ok(prettyplease::unparse(&f))
     }
