@@ -1,15 +1,27 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
+
+//! A Rust source code formatting crate with a unified interface for string, file, and  
+//! [TokenStream](proc_macro2::TokenStream) input. It currently supports
+//! [rustfmt](https://crates.io/crates/rustfmt-nightly) and
+//! [prettyplease](https://crates.io/crates/prettyplease).
+
+use std::fmt::Debug;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::path::Path;
-use std::{fs, io};
+use std::{fmt, fs, io};
 
 // *** Edition ***
 
 /// The Rust edition the source code uses
 #[derive(Clone, Copy, Debug)]
 pub enum Edition {
+    /// Rust 2015 edition
     Rust2015,
+    /// Rust 2018 edition
     Rust2018,
+    /// Rust 2021 edition
     Rust2021,
 }
 
@@ -21,10 +33,26 @@ impl Default for Edition {
 
 // *** Error ***
 
-/// This error is returned upon any formatting errors
+/// This error is returned when errors are triggered during the formatting process
+#[derive(Debug)]
 pub enum Error {
+    /// An I/O related error occurred
     IOError(io::Error),
+    /// An error occurred while attempting to parse the source code - most likely bad syntax
+    #[cfg(feature = "prettyplease")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
+    SynError(syn::Error),
 }
+
+// TODO: Replace with a real implementation
+impl fmt::Display for Error {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        <Self as Debug>::fmt(self, f)
+    }
+}
+
+impl std::error::Error for Error {}
 
 impl From<io::Error> for Error {
     #[inline]
@@ -33,12 +61,21 @@ impl From<io::Error> for Error {
     }
 }
 
+#[cfg(feature = "prettyplease")]
+#[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
+impl From<syn::Error> for Error {
+    #[inline]
+    fn from(err: syn::Error) -> Self {
+        Self::SynError(err)
+    }
+}
+
 // *** Config ***
 
 /// The configuration for the formatters. Other than edition, these options should be considered
 /// proprietary to the formatter being used. They are not portable between formatters.
 ///
-/// Currently, only `rustfmt` uses this and `prettyplease` silently ignores all configuration options
+/// Currently, only [RustFmt] uses this and [PrettyPlease] doesn't take any configuration
 #[derive(Clone, Debug, Default)]
 pub struct Config<I, K, V>
 where
@@ -57,6 +94,7 @@ where
     K: AsRef<str>,
     V: AsRef<str>,
 {
+    /// Creates a new configuration from the given edition and options
     pub fn new(edition: Edition, options: I) -> Self {
         Self {
             edition,
@@ -66,92 +104,65 @@ where
     }
 }
 
-// *** Format Provider ***
-
-fn file_to_string(path: impl AsRef<Path>) -> Result<String, Error> {
-    // Read our file into a string
-    let mut file = fs::File::open(path.as_ref())?;
-    let len = file.metadata()?.len();
-    let mut buffer = String::with_capacity(len as usize);
-
-    file.read_to_string(&mut buffer)?;
-    Ok(buffer)
-}
+// *** Formatter ***
 
 /// A unified interface to all formatters. It allows for formatting from string, file, or
 /// [TokenStream](proc_macro2::TokenStream) (feature `token_stream` required)
-trait FormatProvider {
-    fn from_str<I, K, S, V>(
-        source: S,
-        config: Option<&Config<I, K, V>>,
-    ) -> Result<(String, bool), Error>
-    where
-        I: FromIterator<(K, V)>,
-        K: AsRef<str>,
-        S: AsRef<str>,
-        V: AsRef<str>;
+pub trait Formatter {
+    /// Format the given string and return the results in another `String`. An error is returned
+    /// if any issues occur during formatting
+    fn format_str(source: impl AsRef<str>) -> Result<String, Error>;
 
-    #[inline]
-    fn from_file<I, K, P, V>(path: P, config: Option<&Config<I, K, V>>) -> Result<bool, Error>
-    where
-        I: FromIterator<(K, V)>,
-        K: AsRef<str>,
-        P: AsRef<Path>,
-        V: AsRef<str>,
-    {
-        let source = file_to_string(path.as_ref())?;
-        let (result, changes) = Self::from_str(source, config)?;
+    /// Format the given file specified hte path and overwrite the file with the results. An error
+    /// is returned if any issues occur during formatting
+    fn format_file(path: impl AsRef<Path>) -> Result<(), Error> {
+        // Read our file into a string
+        let mut file = fs::File::open(path.as_ref())?;
+        let len = file.metadata()?.len();
+        let mut source = String::with_capacity(len as usize);
 
-        // Only overwrite file if there were changes
-        if changes {
-            let mut file = fs::File::create(path)?;
-            file.write_all(result.as_bytes())?;
-        }
+        file.read_to_string(&mut source)?;
+        // Close the file now that we are done with it
+        drop(file);
 
-        Ok(changes)
+        let result = Self::format_str(source)?;
+
+        let mut file = fs::File::create(path)?;
+        file.write_all(result.as_bytes())?;
+        Ok(())
     }
 
+    /// Format the given [TokenStream](proc_macro2::TokenStream) and return the results in a `String`.
+    /// An error is returned if any issues occur during formatting
     #[cfg(feature = "token_stream")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "token_stream")))]
     #[inline]
-    fn from_token_stream<I, K, V>(
-        tokens: &proc_macro2::TokenStream,
-        config: Option<&Config<I, K, V>>,
-    ) -> Result<String, Error>
-    where
-        I: FromIterator<(K, V)>,
-        K: AsRef<str>,
-        V: AsRef<str>,
-    {
-        let (result, _) = Self::from_str(tokens.to_string(), config)?;
-        Ok(result)
+    fn format_tokens(tokens: proc_macro2::TokenStream) -> Result<String, Error> {
+        Self::format_str(tokens.to_string())
+    }
+}
+
+// *** Pretty Please ***
+
+#[cfg(feature = "prettyplease")]
+#[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
+pub struct PrettyPlease;
+
+#[cfg(feature = "prettyplease")]
+#[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
+impl Formatter for PrettyPlease {
+    #[inline]
+    fn format_str(source: impl AsRef<str>) -> Result<String, Error> {
+        let f = syn::parse_file(source.as_ref())?;
+        Ok(prettyplease::unparse(&f))
     }
 
     #[inline]
-    fn from_str_check<I, K, S, V>(
-        source: S,
-        config: Option<&Config<I, K, V>>,
-    ) -> Result<bool, Error>
-    where
-        I: FromIterator<(K, V)>,
-        K: AsRef<str>,
-        S: AsRef<str>,
-        V: AsRef<str>,
-    {
-        let (_, changed) = Self::from_str(source, config)?;
-        Ok(changed)
-    }
-
-    #[inline]
-    fn from_file_check<I, K, P, V>(path: P, config: Option<&Config<I, K, V>>) -> Result<bool, Error>
-    where
-        I: FromIterator<(K, V)>,
-        K: AsRef<str>,
-        P: AsRef<Path>,
-        V: AsRef<str>,
-    {
-        let source = file_to_string(path.as_ref())?;
-        let (_, changes) = Self::from_str(source, config)?;
-        Ok(changes)
+    #[cfg(feature = "token_stream")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "token_stream")))]
+    fn format_tokens(tokens: proc_macro2::TokenStream) -> Result<String, Error> {
+        let f = syn::parse2::<syn::File>(tokens)?;
+        Ok(prettyplease::unparse(&f))
     }
 }
 
