@@ -11,6 +11,10 @@ categories = []
 readme = "README.md"
 edition = "2021"
 
+[package.metadata.docs.rs]
+all-features = true
+rustc-args = ["--cfg", "docsrs"]
+
 [features]
 pretty_please = ["prettyplease", "syn", "token_stream"]
 token_stream = ["proc-macro2"]

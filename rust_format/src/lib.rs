@@ -10,7 +10,11 @@ use std::fmt::Debug;
 use std::io::{Read, Write};
 use std::marker::PhantomData;
 use std::path::Path;
-use std::{fmt, fs, io};
+use std::process::{Command, Stdio};
+use std::{env, fmt, fs, io, string};
+
+const RUST_FMT: &str = "rustfmt";
+const RUST_FMT_KEY: &str = "RUSTFMT";
 
 // *** Edition ***
 
@@ -42,6 +46,10 @@ pub enum Error {
     #[cfg(feature = "prettyplease")]
     #[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
     SynError(syn::Error),
+    /// The response of formatting was not valid UTF8
+    UTFConversionError(string::FromUtf8Error),
+    /// The source code has bad syntax and could not be formatted
+    BadSourceCode(String),
 }
 
 // TODO: Replace with a real implementation
@@ -58,6 +66,13 @@ impl From<io::Error> for Error {
     #[inline]
     fn from(err: io::Error) -> Self {
         Self::IOError(err)
+    }
+}
+
+impl From<string::FromUtf8Error> for Error {
+    #[inline]
+    fn from(err: string::FromUtf8Error) -> Self {
+        Self::UTFConversionError(err)
     }
 }
 
@@ -142,8 +157,46 @@ pub trait Formatter {
     }
 }
 
+// *** Rust Fmt ***
+
+/// This formatter uses `rustfmt` for formatting source code
+pub struct RustFmt;
+
+impl Formatter for RustFmt {
+    fn format_str(source: impl AsRef<str>) -> Result<String, Error> {
+        // Use 'rustfmt' specified by the environment var, if specified, else use the default
+        let rustfmt = env::var(RUST_FMT_KEY).unwrap_or_else(|_| RUST_FMT.to_string());
+
+        // Launch rustfmt
+        let mut proc = Command::new(&rustfmt)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        // Get stdin and send our source code to it to be formatted
+        // Safety: Can't panic - we captured stdin above
+        let mut stdin = proc.stdin.take().unwrap();
+        stdin.write_all(source.as_ref().as_bytes())?;
+        // Close stdin
+        drop(stdin);
+
+        // Parse the results and return stdout/stderr
+        let output = proc.wait_with_output()?;
+        let stderr = String::from_utf8(output.stderr)?;
+
+        if output.status.success() {
+            let stdout = String::from_utf8(output.stdout)?;
+            Ok(stdout)
+        } else {
+            Err(Error::BadSourceCode(stderr))
+        }
+    }
+}
+
 // *** Pretty Please ***
 
+/// This formatter uses `prettyplease` for formatting source code
 #[cfg(feature = "prettyplease")]
 #[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
 pub struct PrettyPlease;
