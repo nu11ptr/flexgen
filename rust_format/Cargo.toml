@@ -11,4 +11,8 @@ categories = []
 readme = "README.md"
 edition = "2021"
 
+[features]
+token_stream = ["proc-macro2"]
+
 [dependencies]
+proc-macro2 = { version = "1", optional = true }
