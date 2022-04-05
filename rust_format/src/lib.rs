@@ -5,10 +5,38 @@
 //! [TokenStream](proc_macro2::TokenStream) input. It currently supports
 //! [rustfmt](https://crates.io/crates/rustfmt-nightly) and
 //! [prettyplease](https://crates.io/crates/prettyplease).
+//!
+//! ```
+//! use rust_format::{Formatter, RustFmt};
+//!
+//! let source = r#"fn main() { println!("Hello World!"); }"#;
+//!
+//! let actual = RustFmt::default().format_str(source).unwrap();
+//! let expected = r#"fn main() {
+//!     println!("Hello World!");
+//! }
+//! "#;
+//!
+//! assert_eq!(expected, actual);
+//! ```
 
+// Trick to test README samples (from: https://github.com/rust-lang/cargo/issues/383#issuecomment-720873790)
+#[cfg(doctest)]
+mod test_readme {
+    macro_rules! external_doc_test {
+        ($x:expr) => {
+            #[doc = $x]
+            extern "C" {}
+        };
+    }
+
+    external_doc_test!(include_str!("../README.md"));
+}
+
+use std::collections::HashMap;
 use std::default::Default;
+use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
-use std::marker::PhantomData;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::{env, fmt, fs, io, string};
@@ -31,12 +59,13 @@ pub enum Edition {
 
 impl Edition {
     #[inline]
-    fn as_str(self) -> &'static str {
+    fn as_os_str(self) -> &'static OsStr {
         match self {
             Edition::Rust2015 => "2015",
             Edition::Rust2018 => "2018",
             Edition::Rust2021 => "2021",
         }
+        .as_ref()
     }
 }
 
@@ -104,31 +133,16 @@ impl From<syn::Error> for Error {
 ///
 /// Currently, only [RustFmt] uses this and [PrettyPlease] doesn't take any configuration
 #[derive(Clone, Debug, Default)]
-pub struct Config<I, K, V>
-where
-    I: Default + IntoIterator,
-    K: AsRef<str>,
-    V: AsRef<str>,
-{
+pub struct Config<K, V> {
     edition: Edition,
-    options: I,
-    phantom: PhantomData<(K, V)>,
+    options: HashMap<K, V>,
 }
 
-impl<I, K, V> Config<I, K, V>
-where
-    I: Default + IntoIterator,
-    K: AsRef<str>,
-    V: AsRef<str>,
-{
+impl<K, V> Config<K, V> {
     /// Creates a new configuration from the given edition and options
     #[inline]
-    pub fn new(edition: Edition, options: I) -> Self {
-        Self {
-            edition,
-            options,
-            phantom: PhantomData,
-        }
+    pub fn new(edition: Edition, options: HashMap<K, V>) -> Self {
+        Self { edition, options }
     }
 }
 
@@ -173,68 +187,101 @@ pub trait Formatter {
 // *** Rust Fmt ***
 
 /// This formatter uses `rustfmt` for formatting source code
-pub struct RustFmt<I, K, V>
-where
-    I: Default + IntoIterator,
-    K: AsRef<str>,
-    V: AsRef<str>,
-{
-    config: Config<I, K, V>,
+pub struct RustFmt {
+    rustfmt: OsString,
+    config_str: OsString,
+    edition: Edition,
 }
 
-impl<'a, I, K, V> RustFmt<I, K, V>
-where
-    I: Copy + Default + IntoIterator<Item = (&'a K, &'a V)>,
-    K: Default + AsRef<str> + 'a,
-    V: Default + AsRef<str> + 'a,
-{
+impl RustFmt {
     /// Creates a new instance of the formatter from the given configuration
     #[inline]
-    pub fn new(config: Option<Config<I, K, V>>) -> Self {
-        let config = config.unwrap_or_default();
-        Self { config }
+    pub fn from_config<K, V>(config: Config<K, V>) -> Self
+    where
+        K: Default + AsRef<OsStr>,
+        V: Default + AsRef<OsStr>,
+    {
+        Self::build(Some(config))
     }
 
-    fn build_config_str(&self) -> String {
+    fn build<K, V>(config: Option<Config<K, V>>) -> Self
+    where
+        K: Default + AsRef<OsStr>,
+        V: Default + AsRef<OsStr>,
+    {
+        // Use 'rustfmt' specified by the environment var, if specified, else use the default
+        // Safety: constant - always succeeds
+        let rustfmt = env::var_os(RUST_FMT_KEY).unwrap_or_else(|| RUST_FMT.parse().unwrap());
+
+        let config = config.unwrap_or_default();
+        let edition = config.edition;
+        let config_str = Self::build_config_str(config.options);
+        Self {
+            rustfmt,
+            config_str,
+            edition,
+        }
+    }
+
+    fn build_config_str<K, V>(cfg_options: HashMap<K, V>) -> OsString
+    where
+        K: Default + AsRef<OsStr>,
+        V: Default + AsRef<OsStr>,
+    {
         // Random # that should hold a few options
-        let mut options = String::with_capacity(512);
-        let iter = self.config.options.into_iter();
+        let mut options = OsString::with_capacity(512);
+        let iter = cfg_options.iter();
 
         for (idx, (k, v)) in iter.enumerate() {
             if idx > 0 {
-                options.push(',');
+                options.push(",");
             }
-            options.push_str(k.as_ref());
-            options.push('=');
-            options.push_str(v.as_ref());
+            options.push(k);
+            options.push("=");
+            options.push(v);
         }
 
         options
     }
-}
 
-impl<'a, I, K, V> Formatter for RustFmt<I, K, V>
-where
-    I: Copy + Default + IntoIterator<Item = (&'a K, &'a V)>,
-    K: Default + AsRef<str> + 'a,
-    V: Default + AsRef<str> + 'a,
-{
-    fn format_str(&self, source: impl AsRef<str>) -> Result<String, Error> {
-        // Use 'rustfmt' specified by the environment var, if specified, else use the default
-        let rustfmt = env::var(RUST_FMT_KEY).unwrap_or_else(|_| RUST_FMT.to_string());
+    fn build_args<'a, P>(&'a self, path: Option<&'a P>) -> Vec<&'a OsStr>
+    where
+        P: AsRef<Path> + ?Sized,
+    {
+        let mut args = match path {
+            Some(path) => {
+                let mut args = Vec::with_capacity(5);
+                args.push(path.as_ref().as_ref());
+                args
+            }
+            None => Vec::with_capacity(4),
+        };
 
-        let mut args = Vec::with_capacity(4);
-        args.push("--edition");
-        args.push(self.config.edition.as_str());
+        args.push("--edition".as_ref());
+        args.push(self.edition.as_os_str());
 
-        let config_str = self.build_config_str();
-        if !config_str.is_empty() {
-            args.push("--config");
-            args.push(&config_str);
+        if !self.config_str.is_empty() {
+            args.push("--config".as_ref());
+            args.push(&self.config_str);
         }
 
+        args
+    }
+}
+
+impl Default for RustFmt {
+    #[inline]
+    fn default() -> Self {
+        Self::build(None as Option<Config<&OsStr, &OsStr>>)
+    }
+}
+
+impl Formatter for RustFmt {
+    fn format_str(&self, source: impl AsRef<str>) -> Result<String, Error> {
+        let args = self.build_args(None as Option<&Path>);
+
         // Launch rustfmt
-        let mut proc = Command::new(&rustfmt)
+        let mut proc = Command::new(&self.rustfmt)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -255,6 +302,26 @@ where
         if output.status.success() {
             let stdout = String::from_utf8(output.stdout)?;
             Ok(stdout)
+        } else {
+            Err(Error::BadSourceCode(stderr))
+        }
+    }
+
+    fn format_file(&self, path: impl AsRef<Path>) -> Result<(), Error> {
+        let args = self.build_args(Some(path.as_ref()));
+
+        // Launch rustfmt
+        let proc = Command::new(&self.rustfmt)
+            .stderr(Stdio::piped())
+            .args(args)
+            .spawn()?;
+
+        // Parse the results and return stdout/stderr
+        let output = proc.wait_with_output()?;
+        let stderr = String::from_utf8(output.stderr)?;
+
+        if output.status.success() {
+            Ok(())
         } else {
             Err(Error::BadSourceCode(stderr))
         }

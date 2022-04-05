@@ -8,12 +8,38 @@ A Rust source code formatting crate with a unified interface for string, file, a
 input. It currently supports [rustfmt](https://crates.io/crates/rustfmt-nightly) 
 and [prettyplease](https://crates.io/crates/prettyplease).
 
-## Overview
+## Example
+
+```rust
+use rust_format::{Formatter, RustFmt};
+
+fn main() {
+  let source = r#"fn main() { println!("Hello World!"); }"#;
+
+  let actual = RustFmt::default().format_str(source).unwrap();
+  let expected = r#"fn main() {
+    println!("Hello World!");
+}
+"#;
+
+  assert_eq!(expected, actual);
+}
+```
+
+## Install
 
 ```toml
 [dependencies]
 rust-format = "0.1"
 ```
+
+### Optional Features
+
+* `pretty_please` - enables [prettyplease](https://crates.io/crates/prettyplease)
+  formatting support
+* `token_stream` - enables formatting from 
+  [TokenStream](https://docs.rs/proc-macro2/latest/proc_macro2/struct.TokenStream.html)
+  input
 
 ## Status
 
