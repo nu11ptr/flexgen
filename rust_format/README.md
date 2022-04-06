@@ -59,7 +59,7 @@ mod impls;
 
 ```toml
 [dependencies]
-rust-format = "0.1"
+rust-format = "0.2"
 ```
 
 ### Optional Features
