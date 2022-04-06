@@ -1,13 +1,13 @@
 [package]
 name = "rust-format"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A Rust source code formatting crate with a unified interface for string, file, and TokenStream input"
 repository = "https://github.com/nu11ptr/flexgen/tree/master/rust_format"
 documentation = "https://docs.rs/rust-format"
-keywords = []
-categories = []
+keywords = ["rustfmt", "prettyplease", "formatter", "quote"]
+categories = ["development-tools", "value-formatting"]
 readme = "README.md"
 edition = "2021"
 
@@ -23,3 +23,8 @@ token_stream = ["proc-macro2"]
 prettyplease = { version = "0.1", optional = true }
 proc-macro2 = { version = "1.0", optional = true }
 syn = { version = "1.0", default-features = false, features = ["full", "parsing"], optional = true }
+
+[dev-dependencies]
+quote = "1.0"
+temp-env = "0.2"
+tempfile = "3.3"

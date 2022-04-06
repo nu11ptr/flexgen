@@ -188,6 +188,30 @@ pub trait Formatter {
 // *** Rust Fmt ***
 
 /// This formatter uses `rustfmt` for formatting source code
+///
+/// An example using a custom configuration:
+/// ```
+/// use std::collections::HashMap;
+/// use rust_format::{Config, Edition, Formatter, RustFmt};
+///
+/// let source = r#"use std::marker; use std::io; mod test; mod impls;"#;
+///
+/// let mut options = HashMap::with_capacity(2);
+/// options.insert("reorder_imports", "false");
+/// options.insert("reorder_modules", "false");
+///
+/// let config = Config::new(Edition::Rust2018, options);
+/// let rustfmt = RustFmt::from_config(config);
+///
+/// let actual = rustfmt.format_str(source).unwrap();
+/// let expected = r#"use std::marker;
+/// use std::io;
+/// mod test;
+/// mod impls;
+/// "#;
+///
+/// assert_eq!(expected, actual);
+/// ```
 pub struct RustFmt {
     rustfmt: OsString,
     config_str: Option<OsString>,
@@ -341,7 +365,38 @@ impl Formatter for RustFmt {
 
 // *** Pretty Please ***
 
-/// This formatter uses `prettyplease` for formatting source code
+/// This formatter uses [prettyplease](https://crates.io/crates/prettyplease) for formatting source code
+///
+/// From string:
+/// ```
+/// use rust_format::{Formatter, PrettyPlease};
+///
+/// let source = r#"fn main() { println!("Hello World!"); }"#;
+///
+/// let actual = PrettyPlease.format_str(source).unwrap();
+/// let expected = r#"fn main() {
+///     println!("Hello World!");
+/// }
+/// "#;
+///
+/// assert_eq!(expected, actual);
+/// ```
+///
+/// From token stream:
+/// ```
+/// use quote::quote;
+/// use rust_format::{Formatter, PrettyPlease};
+///
+/// let source = quote! { fn main() { println!("Hello World!"); } };
+///
+/// let actual = PrettyPlease.format_tokens(source).unwrap();
+/// let expected = r#"fn main() {
+///     println!("Hello World!");
+/// }
+/// "#;
+///
+/// assert_eq!(expected, actual);
+/// ```
 #[cfg(feature = "prettyplease")]
 #[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
 pub struct PrettyPlease;
@@ -365,4 +420,65 @@ impl Formatter for PrettyPlease {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use std::io::{Read, Seek, Write};
+
+    #[cfg(feature = "prettyplease")]
+    use crate::PrettyPlease;
+    use crate::{Error, Formatter, RustFmt};
+
+    fn format_file(fmt: impl Formatter) {
+        // Write source code to file
+        let source = r#"fn main() { println!("Hello World!"); }"#;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(source.as_bytes()).unwrap();
+
+        fmt.format_file(file.path()).unwrap();
+
+        // Now read back the formatted file
+        file.rewind().unwrap();
+        let mut actual = String::with_capacity(128);
+        file.read_to_string(&mut actual).unwrap();
+
+        let expected = r#"fn main() {
+    println!("Hello World!");
+}
+"#;
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn rustfmt_file() {
+        format_file(RustFmt::new());
+    }
+
+    #[cfg(feature = "prettyplease")]
+    #[test]
+    fn prettyplease_file() {
+        format_file(PrettyPlease);
+    }
+
+    fn bad_format_file(fmt: impl Formatter) {
+        // Write source code to file
+        let source = r#"use"#;
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(source.as_bytes()).unwrap();
+
+        match fmt.format_file(file.path()) {
+            Err(Error::BadSourceCode(_)) => {}
+            _ => panic!("Expected bad source code"),
+        }
+    }
+
+    #[test]
+    fn rustfmt_bad_file() {
+        bad_format_file(RustFmt::new());
+    }
+
+    #[cfg(feature = "prettyplease")]
+    #[test]
+    fn prettyplease_bad_file() {
+        bad_format_file(PrettyPlease);
+    }
+}

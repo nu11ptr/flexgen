@@ -8,7 +8,9 @@ A Rust source code formatting crate with a unified interface for string, file, a
 input. It currently supports [rustfmt](https://crates.io/crates/rustfmt-nightly) 
 and [prettyplease](https://crates.io/crates/prettyplease).
 
-## Example
+## Examples
+
+Simple example using default options of `RustFmt`:
 
 ```rust
 use rust_format::{Formatter, RustFmt};
@@ -22,6 +24,33 @@ fn main() {
 }
 "#;
 
+  assert_eq!(expected, actual);
+}
+```
+
+Using a custom configuration:
+
+```rust
+use std::collections::HashMap;
+use rust_format::{Config, Edition, Formatter, RustFmt};
+
+fn main() {
+  let source = r#"use std::marker; use std::io; mod test; mod impls;"#;
+  
+  let mut options = HashMap::with_capacity(2);
+  options.insert("reorder_imports", "false");
+  options.insert("reorder_modules", "false");
+  
+  let config = Config::new(Edition::Rust2018, options);
+  let rustfmt = RustFmt::from_config(config);
+  
+  let actual = rustfmt.format_str(source).unwrap();
+  let expected = r#"use std::marker;
+use std::io;
+mod test;
+mod impls;
+"#;
+  
   assert_eq!(expected, actual);
 }
 ```
@@ -40,10 +69,6 @@ rust-format = "0.1"
 * `token_stream` - enables formatting from 
   [TokenStream](https://docs.rs/proc-macro2/latest/proc_macro2/struct.TokenStream.html)
   input
-
-## Status
-
-Still in development. Reserving on crates.io for now.
 
 ## License
 
