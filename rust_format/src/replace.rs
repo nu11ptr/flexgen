@@ -11,6 +11,11 @@ const EMPTY_COMMENT: &str = "//";
 const EMPTY_DOC_COMMENT: &str = "///";
 const COMMENT_START: &str = "// ";
 const DOC_COMMENT_START: &str = "/// ";
+const LF_STR: &str = "\n";
+const CRLF_STR: &str = "\r\n";
+
+const CR: u8 = b'\r';
+const LF: u8 = b'\n';
 
 const MIN_BUFF_SIZE: usize = 128;
 
@@ -24,7 +29,7 @@ const MIN_BUFF_SIZE: usize = 128;
 // #3 is what is below - it does basic lexing of Rust comments and strings for the purposes of skipping them only. It
 // understands just enough to do the job. The weird part is it literally searches inside all other constructs, but the
 // probability of a false positive while low in comments and strings, is likely very close to zero anywhere else, so
-// I think this is a good compromise. Regardless, the user will be advised to not use `_comment_!(` or `_blank_!(`
+// I think this is a good compromise. Regardless, the user should be advised to not use `_comment_!(` or `_blank_!(`
 // anywhere in the source file other than where they want markers.
 //
 // It should also be noted we take some liberties with things like the doc block and assume it has been properly formatted
@@ -33,8 +38,10 @@ const MIN_BUFF_SIZE: usize = 128;
 struct CopyingCursor<'a> {
     start_idx: usize,
     curr_idx: usize,
-    pub curr: u8,
+    curr: u8,
 
+    // We can iterate as if this were raw bytes since we are only matching ASCII. We preserve
+    // any unicode, however, and copy it verbatim
     iter: slice::Iter<'a, u8>,
     source: &'a str,
     buffer: String,
@@ -66,16 +73,11 @@ impl<'a> CopyingCursor<'a> {
     }
 
     #[inline]
-    fn copy_to_curr(&mut self) {
-        self.copy_to_marker(self.curr_idx);
-    }
-
-    #[inline]
-    fn copy_to_marker(&mut self, marker: usize) {
+    fn copy_to_marker(&mut self, marker: usize, new_start_idx: usize) {
         if marker > self.start_idx {
-            // Copy exclusive of marker position
+            // Copy inclusive of marker position
             self.buffer.push_str(&self.source[self.start_idx..marker]);
-            self.start_idx = marker;
+            self.start_idx = new_start_idx;
         }
     }
 
@@ -83,7 +85,7 @@ impl<'a> CopyingCursor<'a> {
         // We have done some work
         if self.start_idx > 0 {
             // Last write to ensure everything is copied
-            self.copy_to_curr();
+            self.copy_to_marker(self.curr_idx + 1, self.curr_idx + 1);
 
             self.buffer.shrink_to_fit();
             Cow::Owned(self.buffer)
@@ -217,16 +219,16 @@ impl<'a> CopyingCursor<'a> {
     }
 
     fn try_match(&mut self, sl: &[u8]) -> bool {
-        let mut iter = sl.iter();
+        let iter = sl.iter();
 
-        while let Some(ch) = iter.next() {
-            if iter.next().is_none() {
+        for &ch in iter {
+            if self.next().is_none() {
                 // This isn't great as it will reevaluate the last char - 'b' or 'c' in the main loop,
                 // but since those aren't top level it will exit at the bottom of the main loop gracefully
                 return false;
             }
 
-            if self.curr != *ch {
+            if self.curr != ch {
                 return false;
             }
         }
@@ -235,41 +237,53 @@ impl<'a> CopyingCursor<'a> {
         true
     }
 
-    fn process_blanks(buffer: &mut String, num: &str) -> Result<(), Error> {
+    fn detect_line_ending(&mut self) -> Option<&'static str> {
+        match self.next() {
+            Some(CR) => match self.next() {
+                Some(LF) => Some(CRLF_STR),
+                _ => None,
+            },
+            Some(LF) => Some(LF_STR),
+            _ => None,
+        }
+    }
+
+    fn process_blanks(buffer: &mut String, num: &str, ending: &str) -> Result<(), Error> {
         // Single blank line
         if num.is_empty() {
-            // TODO: CRLF detection?
-            buffer.push('\n');
+            buffer.push_str(ending);
         // Multiple blank lines
         } else {
             let num: syn::LitInt = syn::parse_str(num)?;
             let blanks: u32 = num.base10_parse()?;
 
             for _ in 0..blanks {
-                // TODO: CRLF detection?
-                buffer.push('\n');
+                buffer.push_str(ending);
             }
         }
 
         Ok(())
     }
 
-    fn process_comments(buffer: &mut String, s: &str) -> Result<(), Error> {
+    fn process_comments(buffer: &mut String, s: &str, ending: &str) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
             buffer.push_str(EMPTY_COMMENT);
-            // TODO: CRLF detection?
-            buffer.push('\n');
+            buffer.push_str(ending);
         // Multiple comments
         } else {
             let s: syn::LitStr = syn::parse_str(s)?;
             let comment = s.value();
 
             for line in comment.lines() {
-                buffer.push_str(COMMENT_START);
-                buffer.push_str(line);
-                // TODO: CRLF detection?
-                buffer.push('\n');
+                if line.is_empty() {
+                    buffer.push_str(EMPTY_COMMENT);
+                } else {
+                    buffer.push_str(COMMENT_START);
+                    buffer.push_str(line);
+                }
+
+                buffer.push_str(ending);
             }
         }
 
@@ -278,15 +292,17 @@ impl<'a> CopyingCursor<'a> {
 
     fn try_match_replace<F>(&mut self, prefix: &[u8], f: F) -> Result<bool, Error>
     where
-        F: FnOnce(&mut String, &str) -> Result<(), Error>,
+        F: FnOnce(&mut String, &str, &str) -> Result<(), Error>,
     {
-        // We already matched 2 chars before we got here
-        let mark_start_ident = self.curr_idx - 2;
+        // We already matched 2 chars before we got here (but didn't 'next()' after last match)
+        let mark_start_ident = self.curr_idx - 1;
 
         if !self.try_match(prefix) {
             return Ok(false);
         }
-        let mark_start_value = self.curr_idx;
+        let mark_start_value = self.curr_idx + 1;
+
+        // TODO: Not good enough - needs to skip string for comment and integer for blank
 
         // Match until we find the end symbol
         while let Some(ch) = self.next() {
@@ -300,15 +316,23 @@ impl<'a> CopyingCursor<'a> {
                         break;
                     }
 
-                    // Copy everything up until this marker
-                    self.copy_to_marker(mark_start_ident);
+                    if let Some(ending) = self.detect_line_ending() {
+                        // Mark end of ident here (inclusive)
+                        let mark_end_ident = self.curr_idx + 1;
 
-                    // Parse and output
-                    f(
-                        &mut self.buffer,
-                        &self.source[mark_start_value..mark_end_value],
-                    )?;
-                    return Ok(true);
+                        // Copy everything up until this marker
+                        self.copy_to_marker(mark_start_ident, mark_end_ident);
+
+                        // Parse and output
+                        f(
+                            &mut self.buffer,
+                            &self.source[mark_start_value..mark_end_value],
+                            ending,
+                        )?;
+                        return Ok(true);
+                    } else {
+                        break;
+                    }
                 } else {
                     // Again another not great exit, but again ')' is not a top level char of interest
                     break;
@@ -321,22 +345,24 @@ impl<'a> CopyingCursor<'a> {
 
     // NOTE: Tempting to merge with process_comments but that one is called from a closure
     // and can't have more params
-    fn process_doc_block(buffer: &mut String, s: &str) -> Result<(), Error> {
+    fn process_doc_block(buffer: &mut String, s: &str, ending: &str) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
             buffer.push_str(EMPTY_DOC_COMMENT);
-            // TODO: CRLF detection?
-            buffer.push('\n');
+            buffer.push_str(ending);
         // Multiple comments
         } else {
             let s: syn::LitStr = syn::parse_str(s)?;
             let comment = s.value();
 
             for line in comment.lines() {
-                buffer.push_str(DOC_COMMENT_START);
-                buffer.push_str(line);
-                // TODO: CRLF detection?
-                buffer.push('\n');
+                if line.is_empty() {
+                    buffer.push_str(EMPTY_DOC_COMMENT);
+                } else {
+                    buffer.push_str(DOC_COMMENT_START);
+                    buffer.push_str(line);
+                }
+                buffer.push_str(ending);
             }
         }
 
@@ -344,13 +370,13 @@ impl<'a> CopyingCursor<'a> {
     }
 
     fn try_doc_block_match_replace(&mut self) -> Result<bool, Error> {
-        // We already matched 1 char before we got here
-        let mark_start_ident = self.curr_idx - 1;
+        // We already matched 1 char before we got here (but didn't 'next()' after)
+        let mark_start_ident = self.curr_idx;
 
         if !self.try_match(DOC_BLOCK) {
             return Ok(false);
         }
-        let mark_start_value = self.curr_idx;
+        let mark_start_value = self.curr_idx + 1;
 
         // Match until we find the end symbol
         while let Some(ch) = self.next() {
@@ -358,15 +384,23 @@ impl<'a> CopyingCursor<'a> {
                 // End of string (exclusive)
                 let mark_end_value = self.curr_idx;
 
-                // Copy everything up until this marker
-                self.copy_to_marker(mark_start_ident);
+                if let Some(ending) = self.detect_line_ending() {
+                    // Mark end of ident here (exclusive)
+                    let mark_end_ident = self.curr_idx + 1;
 
-                // Parse and output
-                Self::process_doc_block(
-                    &mut self.buffer,
-                    &self.source[mark_start_value..mark_end_value],
-                )?;
-                return Ok(true);
+                    // Copy everything up until this marker
+                    self.copy_to_marker(mark_start_ident, mark_end_ident);
+
+                    // Parse and output
+                    Self::process_doc_block(
+                        &mut self.buffer,
+                        &self.source[mark_start_value..mark_end_value],
+                        ending,
+                    )?;
+                    return Ok(true);
+                } else {
+                    break;
+                }
             }
         }
 
@@ -443,5 +477,143 @@ pub(crate) fn replace_markers(s: &str, replace_doc_blocks: bool) -> Result<Cow<s
         }
         // Empty file
         None => Ok(Cow::Borrowed(s)),
+    }
+}
+
+// *** Tests ***
+
+#[cfg(test)]
+mod tests {
+    use crate::replace::replace_markers;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn blank() {
+        let source = "";
+
+        let actual = replace_markers(source, false).unwrap();
+        let expected = source;
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn no_replacements() {
+        let source = r####"// _comment!_("comment");
+
+/* /* nested comment */ */
+        
+/// This is a main function
+fn main() {
+    println!("hello world");
+    println!(r##"hello raw world!"##);
+}
+_blank!_;
+"####;
+
+        let actual = replace_markers(source, false).unwrap();
+        let expected = source;
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replace_comments() {
+        let source = r####"// _comment!_("comment");
+
+/* /* nested comment */ */
+_comment_!("comment 1\n\ncomment 2");
+_comment!("skip this");        
+/// This is a main function
+fn main() {
+    println!(r##"hello raw world!"##);
+    _comment_!();
+    println!("hello \nworld");
+}
+_blank!_;
+"####;
+
+        let actual = replace_markers(source, false).unwrap();
+        let expected = r####"// _comment!_("comment");
+
+/* /* nested comment */ */
+// comment 1
+//
+// comment 2
+_comment!("skip this");        
+/// This is a main function
+fn main() {
+    println!(r##"hello raw world!"##);
+    //
+    println!("hello \nworld");
+}
+_blank!_;
+"####;
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replace_blanks() {
+        let source = r####"// _blank!_(5);
+
+/* /* nested comment */ */
+_blank_!(2);
+_blank!("skip this");
+#[doc = "This is a main function"]
+fn main() {
+    println!(r##"hello raw world!"##);
+    _blank_!();
+    println!("hello \nworld");
+}
+_blank!_;
+"####;
+
+        let actual = replace_markers(source, false).unwrap();
+        let expected = r####"// _blank!_(5);
+
+/* /* nested comment */ */
+
+
+_blank!("skip this");
+#[doc = "This is a main function"]
+fn main() {
+    println!(r##"hello raw world!"##);
+    
+    println!("hello \nworld");
+}
+_blank!_;
+"####;
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replace_doc_blocks() {
+        let source = r####"// _blank!_(5);
+
+/* /* nested comment */ */
+#[doc = r#"This is a main function"#]
+fn main() {
+    println!(r##"hello raw world!"##);
+    println!("hello \nworld");
+}
+_blank!_;
+"####;
+
+        let actual = replace_markers(source, true).unwrap();
+        let expected = r####"// _blank!_(5);
+
+/* /* nested comment */ */
+/// This is a main function
+fn main() {
+    println!(r##"hello raw world!"##);
+    println!("hello \nworld");
+}
+_blank!_;
+"####;
+
+        assert_eq!(expected, actual);
     }
 }

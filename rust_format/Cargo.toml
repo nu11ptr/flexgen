@@ -25,6 +25,7 @@ proc-macro2 = { version = "1.0", optional = true }
 syn = { version = "1.0", default-features = false, features = ["full", "parsing"], optional = true }
 
 [dev-dependencies]
+pretty_assertions = "1.2"
 quote = "1.0"
-temp-env = "0.2"
+# temp-env = "0.2"
 tempfile = "3.3"
