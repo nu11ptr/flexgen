@@ -20,6 +20,8 @@
 //! assert_eq!(expected, actual);
 //! ```
 
+mod replace;
+
 // Trick to test README samples (from: https://github.com/rust-lang/cargo/issues/383#issuecomment-720873790)
 #[cfg(doctest)]
 mod test_readme {
@@ -418,6 +420,8 @@ impl Formatter for PrettyPlease {
         Ok(prettyplease::unparse(&f))
     }
 }
+
+// *** Tests ***
 
 #[cfg(test)]
 mod tests {
