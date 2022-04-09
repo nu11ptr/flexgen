@@ -31,17 +31,15 @@ fn main() {
 Using a custom configuration:
 
 ```rust
-use std::collections::HashMap;
 use rust_format::{Config, Edition, Formatter, RustFmt};
 
 fn main() {
   let source = r#"use std::marker; use std::io; mod test; mod impls;"#;
   
-  let mut options = HashMap::with_capacity(2);
-  options.insert("reorder_imports", "false");
-  options.insert("reorder_modules", "false");
-  
-  let config = Config::new(Edition::Rust2018, options);
+  let mut config = Config::new_basic()
+    .edition(Edition::Rust2018)
+    .option("reorder_imports", "false")
+    .option("reorder_modules", "false");
   let rustfmt = RustFmt::from_config(config);
   
   let actual = rustfmt.format_str(source).unwrap();

@@ -20,7 +20,20 @@
 //! assert_eq!(expected, actual);
 //! ```
 
+#[cfg(feature = "post_process")]
 mod replace;
+
+#[cfg(not(feature = "post_process"))]
+mod replace {
+    use std::borrow::Cow;
+
+    use crate::Error;
+
+    #[inline]
+    pub(crate) fn replace_markers(s: &str, _replace_doc_blocks: bool) -> Result<Cow<str>, Error> {
+        Ok(Cow::Borrowed(s))
+    }
+}
 
 // Trick to test README samples (from: https://github.com/rust-lang/cargo/issues/383#issuecomment-720873790)
 #[cfg(doctest)]
@@ -35,48 +48,18 @@ mod test_readme {
     external_doc_test!(include_str!("../README.md"));
 }
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::default::Default;
 use std::ffi::{OsStr, OsString};
+use std::hash::Hash;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::{env, fmt, fs, io, string};
 
 const RUST_FMT: &str = "rustfmt";
 const RUST_FMT_KEY: &str = "RUSTFMT";
-
-// *** Edition ***
-
-/// The Rust edition the source code uses
-#[derive(Clone, Copy, Debug)]
-pub enum Edition {
-    /// Rust 2015 edition
-    Rust2015,
-    /// Rust 2018 edition
-    Rust2018,
-    /// Rust 2021 edition
-    Rust2021,
-}
-
-impl Edition {
-    #[inline]
-    fn as_os_str(self) -> &'static OsStr {
-        match self {
-            Edition::Rust2015 => "2015",
-            Edition::Rust2018 => "2018",
-            Edition::Rust2021 => "2021",
-        }
-        .as_ref()
-    }
-}
-
-impl Default for Edition {
-    #[inline]
-    fn default() -> Self {
-        Edition::Rust2021
-    }
-}
 
 // *** Error ***
 
@@ -128,30 +111,214 @@ impl From<syn::Error> for Error {
     }
 }
 
+// *** Edition ***
+
+/// The Rust edition the source code uses
+#[derive(Clone, Copy, Debug)]
+pub enum Edition {
+    /// Rust 2015 edition
+    Rust2015,
+    /// Rust 2018 edition
+    Rust2018,
+    /// Rust 2021 edition
+    Rust2021,
+}
+
+impl Edition {
+    #[inline]
+    fn as_os_str(self) -> &'static OsStr {
+        match self {
+            Edition::Rust2015 => "2015",
+            Edition::Rust2018 => "2018",
+            Edition::Rust2021 => "2021",
+        }
+        .as_ref()
+    }
+}
+
+impl Default for Edition {
+    #[inline]
+    fn default() -> Self {
+        Edition::Rust2021
+    }
+}
+
+// *** Post Processing ***
+
+/// Post format processing options - optionally replace comment/blank markers and doc blocks
+#[derive(Clone, Copy, Debug)]
+pub enum PostProcess {
+    /// No post processing after formatting (default)
+    None,
+
+    /// Replace `_blank_!` and `_comment_!` markers
+    #[cfg(feature = "post_process")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
+    ReplaceMarkers,
+
+    /// Replace `_blank_!` and `_comment_!` markers and  `#[doc = ""]` (with `///`)
+    #[cfg(feature = "post_process")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
+    ReplaceMarkersAndDocBlocks,
+}
+
+impl PostProcess {
+    /// Returns true if blank and comment markers should be replaced in the formatted source or
+    /// false if they should not be
+    #[inline]
+    pub fn replace_markers(self) -> bool {
+        !matches!(self, PostProcess::None)
+    }
+
+    /// Returns true if doc blocks should be replaced in the formatted source or false if they
+    /// should not be
+    #[cfg(feature = "post_process")]
+    #[inline]
+    pub fn replace_doc_blocks(self) -> bool {
+        matches!(self, PostProcess::ReplaceMarkersAndDocBlocks)
+    }
+
+    /// Returns true if doc blocks should be replaced in the formatted source or false if they
+    /// should not be
+    #[cfg(not(feature = "post_process"))]
+    #[inline]
+    pub fn replace_doc_blocks(self) -> bool {
+        false
+    }
+}
+
+impl Default for PostProcess {
+    #[inline]
+    fn default() -> Self {
+        PostProcess::None
+    }
+}
+
 // *** Config ***
 
-/// The configuration for the formatters. Other than edition, these options should be considered
-/// proprietary to the formatter being used. They are not portable between formatters.
-///
-/// Currently, only [RustFmt] uses this and [PrettyPlease] doesn't take any configuration
+/// The configuration for the formatters. Most of the options are for `rustfmt` only (they are ignored
+/// by [PrettyPlease], but [PostProcess] options are used by both formatters.
 #[derive(Clone, Debug, Default)]
-pub struct Config<K, V> {
+pub struct Config<K, P, V>
+where
+    K: Eq + Hash + AsRef<OsStr>,
+    P: Into<PathBuf>,
+    V: AsRef<OsStr>,
+{
+    rust_fmt: Option<P>,
     edition: Edition,
+    post_proc: PostProcess,
     options: HashMap<K, V>,
 }
 
-impl<K, V> Config<K, V> {
-    /// Creates a new configuration from the given edition and options
+impl<'a, 'b> Config<&'a str, &'b str, &'a str> {
+    /// Creates a new blank configuration with basic type assumptions
+    /// (if you wish to use different types, use [new](Config::new) instead)
     #[inline]
-    pub fn new(edition: Edition, options: HashMap<K, V>) -> Self {
-        Self { edition, options }
+    pub fn new_basic() -> Self {
+        Self::new()
     }
+
+    /// Creates a new configuration from the given [HashMap] of options with certain basic type
+    /// assumptions (if you wish to use different types, use [from_hash_map](Config::from_hash_map) instead)
+    #[inline]
+    pub fn from_hash_map_basic(options: HashMap<&'a str, &'a str>) -> Self {
+        Self::from_hash_map(options)
+    }
+}
+
+impl<K, P, V> Config<K, P, V>
+where
+    K: Eq + Hash + AsRef<OsStr>,
+    P: Into<PathBuf>,
+    V: AsRef<OsStr>,
+{
+    /// Creates a new blank configuration without type parameter assumptions
+    #[inline]
+    pub fn new() -> Self {
+        Self::from_hash_map(HashMap::default())
+    }
+
+    /// Creates a new configuration from the given [HashMap] of options with no type assumptions
+    #[inline]
+    pub fn from_hash_map(options: HashMap<K, V>) -> Self {
+        Self {
+            rust_fmt: None,
+            edition: Edition::Rust2021,
+            post_proc: PostProcess::None,
+            options,
+        }
+    }
+
+    /// Set the path to the `rustfmt` binary to use (`RustFmt` only, ignored by `PrettyPlease`)
+    /// This takes precedence over the `RUSTFMT` environment variable, if specified
+    #[inline]
+    pub fn rust_fmt_path(mut self, path: P) -> Self {
+        self.rust_fmt = Some(path);
+        self
+    }
+
+    /// Set the Rust edition of the source input (`RustFmt` only, ignored by `PrettyPlease`)
+    #[inline]
+    pub fn edition(mut self, edition: Edition) -> Self {
+        self.edition = edition;
+        self
+    }
+
+    /// Set the post processing option after formatting (used by both `RustFmt` and `PrettyPlease`)
+    #[inline]
+    pub fn post_proc(mut self, post_proc: PostProcess) -> Self {
+        self.post_proc = post_proc;
+        self
+    }
+
+    /// Set a key/value pair option (`RustFmt` only, ignored by `PrettyPlease`)
+    /// See [here](https://rust-lang.github.io/rustfmt/) for a list of possible options
+    #[inline]
+    pub fn option(mut self, key: K, value: V) -> Self {
+        self.options.insert(key, value);
+        self
+    }
+}
+
+// *** Misc. format related functions ***
+
+#[inline]
+fn post_process(post_proc: PostProcess, source: String) -> Result<String, Error> {
+    if post_proc.replace_markers() {
+        match replace::replace_markers(&source, post_proc.replace_doc_blocks())? {
+            // No change
+            Cow::Borrowed(_) => Ok(source),
+            // Changed
+            Cow::Owned(source) => Ok(source),
+        }
+    } else {
+        Ok(source)
+    }
+}
+
+#[inline]
+fn file_to_string(path: impl AsRef<Path>) -> Result<String, Error> {
+    // Read our file into a string
+    let mut file = fs::File::open(path.as_ref())?;
+    let len = file.metadata()?.len();
+    let mut source = String::with_capacity(len as usize);
+
+    file.read_to_string(&mut source)?;
+    Ok(source)
+}
+
+#[inline]
+fn string_to_file(path: impl AsRef<Path>, source: &str) -> Result<(), Error> {
+    let mut file = fs::File::create(path)?;
+    file.write_all(source.as_bytes())?;
+    Ok(())
 }
 
 // *** Formatter ***
 
 /// A unified interface to all formatters. It allows for formatting from string, file, or
-/// [TokenStream](proc_macro2::TokenStream) (feature `token_stream` required)
+/// [TokenStream](proc_macro2::TokenStream)
 pub trait Formatter {
     /// Format the given string and return the results in another `String`. An error is returned
     /// if any issues occur during formatting
@@ -160,20 +327,9 @@ pub trait Formatter {
     /// Format the given file specified hte path and overwrite the file with the results. An error
     /// is returned if any issues occur during formatting
     fn format_file(&self, path: impl AsRef<Path>) -> Result<(), Error> {
-        // Read our file into a string
-        let mut file = fs::File::open(path.as_ref())?;
-        let len = file.metadata()?.len();
-        let mut source = String::with_capacity(len as usize);
-
-        file.read_to_string(&mut source)?;
-        // Close the file now that we are done with it
-        drop(file);
-
+        let source = file_to_string(path.as_ref())?;
         let result = self.format_str(source)?;
-
-        let mut file = fs::File::create(path)?;
-        file.write_all(result.as_bytes())?;
-        Ok(())
+        string_to_file(path, &result)
     }
 
     /// Format the given [TokenStream](proc_macro2::TokenStream) and return the results in a `String`.
@@ -192,16 +348,14 @@ pub trait Formatter {
 ///
 /// An example using a custom configuration:
 /// ```
-/// use std::collections::HashMap;
 /// use rust_format::{Config, Edition, Formatter, RustFmt};
 ///
 /// let source = r#"use std::marker; use std::io; mod test; mod impls;"#;
 ///
-/// let mut options = HashMap::with_capacity(2);
-/// options.insert("reorder_imports", "false");
-/// options.insert("reorder_modules", "false");
-///
-/// let config = Config::new(Edition::Rust2018, options);
+/// let mut config = Config::new_basic()
+///     .edition(Edition::Rust2018)
+///     .option("reorder_imports", "false")
+///     .option("reorder_modules", "false");
 /// let rustfmt = RustFmt::from_config(config);
 ///
 /// let actual = rustfmt.format_str(source).unwrap();
@@ -214,43 +368,54 @@ pub trait Formatter {
 /// assert_eq!(expected, actual);
 /// ```
 pub struct RustFmt {
-    rustfmt: OsString,
-    config_str: Option<OsString>,
+    rust_fmt: PathBuf,
     edition: Edition,
+    post_proc: PostProcess,
+    config_str: Option<OsString>,
 }
 
 impl RustFmt {
+    /// Creates a new instance of `RustFmt` using a default configuration
     #[inline]
-    fn new() -> Self {
-        Self::build(None as Option<Config<&OsStr, &OsStr>>)
+    pub fn new() -> Self {
+        Self::build(None as Option<Config<&OsStr, &OsStr, &OsStr>>)
     }
 
     /// Creates a new instance of the formatter from the given configuration
     #[inline]
-    pub fn from_config<K, V>(config: Config<K, V>) -> Self
+    pub fn from_config<K, P, V>(config: Config<K, P, V>) -> Self
     where
-        K: Default + AsRef<OsStr>,
+        K: Default + Eq + Hash + AsRef<OsStr>,
+        P: Default + Into<PathBuf>,
         V: Default + AsRef<OsStr>,
     {
         Self::build(Some(config))
     }
 
-    fn build<K, V>(config: Option<Config<K, V>>) -> Self
+    fn build<K, P, V>(config: Option<Config<K, P, V>>) -> Self
     where
-        K: Default + AsRef<OsStr>,
+        K: Default + Eq + Hash + AsRef<OsStr>,
+        P: Default + Into<PathBuf>,
         V: Default + AsRef<OsStr>,
     {
-        // Use 'rustfmt' specified by the environment var, if specified, else use the default
-        // Safety: constant - always succeeds
-        let rustfmt = env::var_os(RUST_FMT_KEY).unwrap_or_else(|| RUST_FMT.parse().unwrap());
-
         let config = config.unwrap_or_default();
+
+        // Use 'rustfmt' specified by the config first, and if not, environment var, if specified,
+        // else use the default
+        let rust_fmt = match config.rust_fmt {
+            Some(path) => path.into(),
+            None => env::var_os(RUST_FMT_KEY)
+                .unwrap_or_else(|| RUST_FMT.parse().unwrap())
+                .into(),
+        };
+
         let edition = config.edition;
         let config_str = Self::build_config_str(config.options);
         Self {
-            rustfmt,
-            config_str,
+            rust_fmt,
             edition,
+            post_proc: config.post_proc,
+            config_str,
         }
     }
 
@@ -317,7 +482,7 @@ impl Formatter for RustFmt {
         let args = self.build_args(None as Option<&Path>);
 
         // Launch rustfmt
-        let mut proc = Command::new(&self.rustfmt)
+        let mut proc = Command::new(&self.rust_fmt)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -337,29 +502,36 @@ impl Formatter for RustFmt {
 
         if output.status.success() {
             let stdout = String::from_utf8(output.stdout)?;
-            Ok(stdout)
+            post_process(self.post_proc, stdout)
         } else {
             Err(Error::BadSourceCode(stderr))
         }
     }
 
     fn format_file(&self, path: impl AsRef<Path>) -> Result<(), Error> {
-        let args = self.build_args(Some(path.as_ref()));
-
-        // Launch rustfmt
-        let proc = Command::new(&self.rustfmt)
-            .stderr(Stdio::piped())
-            .args(args)
-            .spawn()?;
-
-        // Parse the results and return stdout/stderr
-        let output = proc.wait_with_output()?;
-        let stderr = String::from_utf8(output.stderr)?;
-
-        if output.status.success() {
-            Ok(())
+        // Just use regular string method if doing post processing so we don't write to file twice
+        if self.post_proc.replace_markers() {
+            let source = file_to_string(path.as_ref())?;
+            let result = self.format_str(source)?;
+            string_to_file(path, &result)
         } else {
-            Err(Error::BadSourceCode(stderr))
+            let args = self.build_args(Some(path.as_ref()));
+
+            // Launch rustfmt
+            let proc = Command::new(&self.rust_fmt)
+                .stderr(Stdio::piped())
+                .args(args)
+                .spawn()?;
+
+            // Parse the results and return stdout/stderr
+            let output = proc.wait_with_output()?;
+            let stderr = String::from_utf8(output.stderr)?;
+
+            if output.status.success() {
+                Ok(())
+            } else {
+                Err(Error::BadSourceCode(stderr))
+            }
         }
     }
 }
@@ -374,7 +546,7 @@ impl Formatter for RustFmt {
 ///
 /// let source = r#"fn main() { println!("Hello World!"); }"#;
 ///
-/// let actual = PrettyPlease.format_str(source).unwrap();
+/// let actual = PrettyPlease::default().format_str(source).unwrap();
 /// let expected = r#"fn main() {
 ///     println!("Hello World!");
 /// }
@@ -390,7 +562,7 @@ impl Formatter for RustFmt {
 ///
 /// let source = quote! { fn main() { println!("Hello World!"); } };
 ///
-/// let actual = PrettyPlease.format_tokens(source).unwrap();
+/// let actual = PrettyPlease::default().format_tokens(source).unwrap();
 /// let expected = r#"fn main() {
 ///     println!("Hello World!");
 /// }
@@ -398,17 +570,58 @@ impl Formatter for RustFmt {
 ///
 /// assert_eq!(expected, actual);
 /// ```
-#[cfg(feature = "prettyplease")]
-#[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
-pub struct PrettyPlease;
+#[cfg(feature = "pretty_please")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pretty_please")))]
+#[derive(Default)]
+pub struct PrettyPlease {
+    post_proc: PostProcess,
+}
 
-#[cfg(feature = "prettyplease")]
-#[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
+#[cfg(feature = "pretty_please")]
+impl PrettyPlease {
+    /// Creates a new instance of `PrettyPlease` using a default configuration
+    #[inline]
+    pub fn new() -> Self {
+        Self::build(None as Option<Config<&OsStr, &OsStr, &OsStr>>)
+    }
+
+    /// Creates a new instance of `PrettyPlease` from the given configuration
+    #[inline]
+    pub fn from_config<K, P, V>(config: Config<K, P, V>) -> Self
+    where
+        K: Default + Eq + Hash + AsRef<OsStr>,
+        P: Default + Into<PathBuf>,
+        V: Default + AsRef<OsStr>,
+    {
+        Self::build(Some(config))
+    }
+
+    fn build<K, P, V>(config: Option<Config<K, P, V>>) -> Self
+    where
+        K: Default + Eq + Hash + AsRef<OsStr>,
+        P: Default + Into<PathBuf>,
+        V: Default + AsRef<OsStr>,
+    {
+        let config = config.unwrap_or_default();
+
+        Self {
+            post_proc: config.post_proc,
+        }
+    }
+
+    #[inline]
+    fn format(&self, f: &syn::File) -> Result<String, Error> {
+        let result = prettyplease::unparse(f);
+        post_process(self.post_proc, result)
+    }
+}
+
+#[cfg(feature = "pretty_please")]
 impl Formatter for PrettyPlease {
     #[inline]
     fn format_str(&self, source: impl AsRef<str>) -> Result<String, Error> {
         let f = syn::parse_file(source.as_ref())?;
-        Ok(prettyplease::unparse(&f))
+        self.format(&f)
     }
 
     #[inline]
@@ -416,7 +629,7 @@ impl Formatter for PrettyPlease {
     #[cfg_attr(docsrs, doc(cfg(feature = "token_stream")))]
     fn format_tokens(&self, tokens: proc_macro2::TokenStream) -> Result<String, Error> {
         let f = syn::parse2::<syn::File>(tokens)?;
-        Ok(prettyplease::unparse(&f))
+        self.format(&f)
     }
 }
 
@@ -426,7 +639,7 @@ impl Formatter for PrettyPlease {
 mod tests {
     use std::io::{Read, Seek, Write};
 
-    #[cfg(feature = "prettyplease")]
+    #[cfg(feature = "pretty_please")]
     use crate::PrettyPlease;
     use crate::{Error, Formatter, RustFmt};
 
@@ -456,10 +669,10 @@ mod tests {
         format_file(RustFmt::new());
     }
 
-    #[cfg(feature = "prettyplease")]
+    #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplease_file() {
-        format_file(PrettyPlease);
+        format_file(PrettyPlease::new());
     }
 
     fn bad_format_file(fmt: impl Formatter) {
@@ -479,9 +692,9 @@ mod tests {
         bad_format_file(RustFmt::new());
     }
 
-    #[cfg(feature = "prettyplease")]
+    #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplease_bad_file() {
-        bad_format_file(PrettyPlease);
+        bad_format_file(PrettyPlease::new());
     }
 }

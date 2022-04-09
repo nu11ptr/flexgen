@@ -1,4 +1,4 @@
-#![cfg(feature = "replace_markers")]
+#![cfg(feature = "post_process")]
 
 use std::borrow::Cow;
 use std::{cmp, slice};
@@ -28,6 +28,7 @@ const MIN_BUFF_SIZE: usize = 128;
 //
 // The problem with #1 is it is hugely overkill - we are only interested in 3 markers
 // The problem with #2 is that it would find markers in strings and comments - likely not an issue, but it bothered me
+// (and also we generalize the marker replacement code also for doc blocks, which someone could have commented out)
 // #3 is what is below - it does basic lexing of Rust comments and strings for the purposes of skipping them only. It
 // understands just enough to do the job. The weird part is it literally searches inside all other constructs, but the
 // probability of a false positive while low in comments and strings, is likely very close to zero anywhere else, so
@@ -489,7 +490,6 @@ impl<'a> CopyingCursor<'a> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn replace_markers(s: &str, replace_doc_blocks: bool) -> Result<Cow<str>, Error> {
     match CopyingCursor::new(s) {
         Some(mut cursor) => {
