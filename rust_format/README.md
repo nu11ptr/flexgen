@@ -28,8 +28,8 @@ rust-format = "0.3"
 ### Optional Features
 
 * `post_process` - enables support for post-process conversion of special 
-  "marker macros" into blank lines/comments. It additionally supports 
-  converting doc blocks (`#[doc]`) into doc comments `///`
+  "marker macros" into blank lines/comments. It additionally supports converting
+  doc blocks (`#[doc]`) into doc comments (`///`)
 * `pretty_please` - enables [prettyplease](https://crates.io/crates/prettyplease)
   formatting support
 * `token_stream` - enables formatting from
@@ -88,7 +88,7 @@ use rust_format::{Config, Formatter, PostProcess, RustFmt};
 
 fn main() {
   let source = r#"#[doc = " This is main"] fn main() { 
-_blank_!(); _comment_!("This prints hello world\n"); 
+_blank_!(); _comment_!("\nThis prints hello world\n\n"); 
 println!("Hello World!"); }"#;
 
   let mut config = Config::new_str()
@@ -96,8 +96,10 @@ println!("Hello World!"); }"#;
   let actual = RustFmt::from_config(config).format_str(source).unwrap();
   let expected = r#"/// This is main
 fn main() {
-    
+
+    //
     // This prints hello world
+    //
     println!("Hello World!");
 }
 "#;

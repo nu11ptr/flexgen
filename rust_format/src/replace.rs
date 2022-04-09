@@ -221,6 +221,7 @@ impl<'a> CopyingCursor<'a> {
         true
     }
 
+    #[inline]
     fn skip_blank_param(&mut self) -> Result<(), Error> {
         while let Some(ch) = self.next() {
             if ch == b')' {
@@ -272,6 +273,7 @@ impl<'a> CopyingCursor<'a> {
         true
     }
 
+    #[inline]
     fn detect_line_ending(&mut self) -> Option<&'static str> {
         match self.next() {
             Some(CR) => match self.next() {
@@ -283,7 +285,19 @@ impl<'a> CopyingCursor<'a> {
         }
     }
 
-    fn process_blanks(buffer: &mut String, num: &str, ending: &str) -> Result<(), Error> {
+    #[inline]
+    fn push_spaces(spaces: usize, buffer: &mut String) {
+        for _ in 0..spaces {
+            buffer.push(' ');
+        }
+    }
+
+    fn process_blanks(
+        _spaces: usize,
+        buffer: &mut String,
+        num: &str,
+        ending: &str,
+    ) -> Result<(), Error> {
         // Single blank line
         if num.is_empty() {
             buffer.push_str(ending);
@@ -300,9 +314,15 @@ impl<'a> CopyingCursor<'a> {
         Ok(())
     }
 
-    fn process_comments(buffer: &mut String, s: &str, ending: &str) -> Result<(), Error> {
+    fn process_comments(
+        spaces: usize,
+        buffer: &mut String,
+        s: &str,
+        ending: &str,
+    ) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
+            Self::push_spaces(spaces, buffer);
             buffer.push_str(EMPTY_COMMENT);
             buffer.push_str(ending);
         // Multiple comments
@@ -312,10 +332,13 @@ impl<'a> CopyingCursor<'a> {
 
             // Blank comment after parsing
             if comment.is_empty() {
+                Self::push_spaces(spaces, buffer);
                 buffer.push_str(EMPTY_COMMENT);
                 buffer.push_str(ending);
             } else {
                 for line in comment.lines() {
+                    Self::push_spaces(spaces, buffer);
+
                     if line.is_empty() {
                         buffer.push_str(EMPTY_COMMENT);
                     } else {
@@ -333,22 +356,30 @@ impl<'a> CopyingCursor<'a> {
 
     // This is slightly different than comment in that we don't prepend a space but need to translate
     // the doc block literally (#[doc = "test"] == ///test <-- no prepended space)
-    fn process_doc_block(buffer: &mut String, s: &str, ending: &str) -> Result<(), Error> {
+    fn process_doc_block(
+        spaces: usize,
+        buffer: &mut String,
+        s: &str,
+        ending: &str,
+    ) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
+            Self::push_spaces(spaces, buffer);
             buffer.push_str(DOC_COMMENT);
             buffer.push_str(ending);
-            // Multiple comments
+        // Multiple comments
         } else {
             let s: syn::LitStr = syn::parse_str(s)?;
             let comment = s.value();
 
             // Blank comment after parsing
             if comment.is_empty() {
+                Self::push_spaces(spaces, buffer);
                 buffer.push_str(DOC_COMMENT);
                 buffer.push_str(ending);
             } else {
                 for line in comment.lines() {
+                    Self::push_spaces(spaces, buffer);
                     buffer.push_str(DOC_COMMENT);
                     buffer.push_str(line);
                     buffer.push_str(ending);
@@ -359,9 +390,14 @@ impl<'a> CopyingCursor<'a> {
         Ok(())
     }
 
-    fn try_match_prefix(&mut self, chars_matched: usize, prefix: &[u8]) -> Option<(usize, usize)> {
+    fn try_match_prefix(
+        &mut self,
+        spaces: usize,
+        chars_matched: usize,
+        prefix: &[u8],
+    ) -> Option<(usize, usize)> {
         // We already matched X chars before we got here (but didn't 'next()' after last match so minus 1)
-        let mark_start_ident = self.curr_idx - (chars_matched - 1);
+        let mark_start_ident = self.curr_idx - ((chars_matched + spaces) - 1);
 
         if self.try_match(prefix) {
             let mark_start_value = self.curr_idx + 1;
@@ -373,6 +409,7 @@ impl<'a> CopyingCursor<'a> {
 
     fn try_replace<F>(
         &mut self,
+        spaces: usize,
         chars_matched: usize,
         suffix: &[u8],
         mark_start_ident: usize,
@@ -380,7 +417,7 @@ impl<'a> CopyingCursor<'a> {
         f: F,
     ) -> Result<(), Error>
     where
-        F: FnOnce(&mut String, &str, &str) -> Result<(), Error>,
+        F: FnOnce(usize, &mut String, &str, &str) -> Result<(), Error>,
     {
         // End of value (exclusive)
         let mark_end_value = self.curr_idx + (1 - chars_matched);
@@ -400,6 +437,7 @@ impl<'a> CopyingCursor<'a> {
 
             // Parse and output
             f(
+                spaces,
                 &mut self.buffer,
                 &self.source[mark_start_value..mark_end_value],
                 ending,
@@ -410,12 +448,13 @@ impl<'a> CopyingCursor<'a> {
         }
     }
 
-    fn try_replace_blank_marker(&mut self) -> Result<bool, Error> {
-        match self.try_match_prefix(2, BLANK_IDENT) {
+    fn try_replace_blank_marker(&mut self, spaces: usize) -> Result<bool, Error> {
+        match self.try_match_prefix(spaces, 2, BLANK_IDENT) {
             Some((ident_start, value_start)) => {
                 self.skip_blank_param()?;
 
                 self.try_replace(
+                    spaces,
                     1,
                     b";",
                     ident_start,
@@ -428,8 +467,8 @@ impl<'a> CopyingCursor<'a> {
         }
     }
 
-    fn try_replace_comment_marker(&mut self) -> Result<bool, Error> {
-        match self.try_match_prefix(2, COMMENT_IDENT) {
+    fn try_replace_comment_marker(&mut self, spaces: usize) -> Result<bool, Error> {
+        match self.try_match_prefix(spaces, 2, COMMENT_IDENT) {
             Some((ident_start, value_start)) => {
                 // Make sure it is empty or a string
                 let (matched, suffix) = match self.try_skip_string()? {
@@ -446,6 +485,7 @@ impl<'a> CopyingCursor<'a> {
                 };
 
                 self.try_replace(
+                    spaces,
                     matched,
                     suffix,
                     ident_start,
@@ -458,14 +498,15 @@ impl<'a> CopyingCursor<'a> {
         }
     }
 
-    fn try_replace_doc_block(&mut self) -> Result<bool, Error> {
-        match self.try_match_prefix(1, DOC_BLOCK) {
+    fn try_replace_doc_block(&mut self, spaces: usize) -> Result<bool, Error> {
+        match self.try_match_prefix(spaces, 1, DOC_BLOCK) {
             Some((ident_start, value_start)) => {
                 // Make sure it is a string
                 match self.try_skip_string()? {
                     // String
                     None => {
                         self.try_replace(
+                            spaces,
                             0,
                             b"]",
                             ident_start,
@@ -488,18 +529,25 @@ impl<'a> CopyingCursor<'a> {
 pub(crate) fn replace_markers(s: &str, replace_doc_blocks: bool) -> Result<Cow<str>, Error> {
     match CopyingCursor::new(s) {
         Some(mut cursor) => {
+            let mut indent = 0;
+
             loop {
                 match cursor.curr {
                     // Possible raw string
                     b'r' => {
+                        indent = 0;
                         if !cursor.try_skip_raw_string() {
                             continue;
                         }
                     }
                     // Regular string
-                    b'\"' => cursor.skip_string(),
+                    b'\"' => {
+                        indent = 0;
+                        cursor.skip_string()
+                    }
                     // Possible comment
                     b'/' => {
+                        indent = 0;
                         if !cursor.try_skip_comment() {
                             continue;
                         }
@@ -513,30 +561,44 @@ pub(crate) fn replace_markers(s: &str, replace_doc_blocks: bool) -> Result<Cow<s
                         match cursor.curr {
                             // Possible blank marker
                             b'b' => {
-                                if !cursor.try_replace_blank_marker()? {
+                                if !cursor.try_replace_blank_marker(indent)? {
+                                    indent = 0;
                                     continue;
                                 }
                             }
                             // Possible comment marker
                             b'c' => {
-                                if !cursor.try_replace_comment_marker()? {
+                                if !cursor.try_replace_comment_marker(indent)? {
+                                    indent = 0;
                                     continue;
                                 }
                             }
                             // Nothing we are interested in
                             _ => {
+                                indent = 0;
                                 continue;
                             }
                         }
+
+                        indent = 0;
                     }
                     // Possible doc block
                     b'#' if replace_doc_blocks => {
-                        if !cursor.try_replace_doc_block()? {
+                        if !cursor.try_replace_doc_block(indent)? {
+                            indent = 0;
                             continue;
                         }
+
+                        indent = 0;
+                    }
+                    // Count spaces in front of our three special replacements
+                    b' ' => {
+                        indent += 1;
                     }
                     // Anything else
-                    _ => {}
+                    _ => {
+                        indent = 0;
+                    }
                 }
 
                 if cursor.next().is_none() {
@@ -670,7 +732,7 @@ _blank!_("skip this");
 fn main() {
     let r#test = "hello";
     println!(r"hello raw world!");
-    
+
     println!("hello \nworld");
 }
 

@@ -708,7 +708,7 @@ fn main() {
 fn main() {
     // This prints hello world
     println!("Hello World!");
-    
+
 }
 "#;
     #[cfg(feature = "post_process")]
@@ -716,7 +716,7 @@ fn main() {
 fn main() {
     // This prints hello world
     println!("Hello World!");
-    
+
 }
 "#;
 
