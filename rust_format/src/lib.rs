@@ -120,8 +120,7 @@ impl From<string::FromUtf8Error> for Error {
     }
 }
 
-#[cfg(feature = "prettyplease")]
-#[cfg_attr(docsrs, doc(cfg(feature = "prettyplease")))]
+#[cfg(feature = "syn")]
 impl From<syn::Error> for Error {
     #[inline]
     fn from(err: syn::Error) -> Self {

@@ -16,13 +16,14 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-pretty_please = ["prettyplease", "syn", "token_stream"]
+pretty_please = ["prettyplease", "syn/full", "syn/parsing", "token_stream"]
 token_stream = ["proc-macro2"]
+replace_markers = ["syn/parsing"]
 
 [dependencies]
 prettyplease = { version = "0.1", optional = true }
 proc-macro2 = { version = "1.0", optional = true }
-syn = { version = "1.0", default-features = false, features = ["full", "parsing"], optional = true }
+syn = { version = "1.0", default-features = false, optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1.2"

@@ -1,3 +1,5 @@
+#![cfg(feature = "replace_markers")]
+
 use std::borrow::Cow;
 use std::{cmp, slice};
 
@@ -5,7 +7,7 @@ use crate::Error;
 
 const BLANK_IDENT: &[u8] = b"lank_!(";
 const COMMENT_IDENT: &[u8] = b"omment_!(";
-const DOC_BLOCK: &[u8] = b"[doc =";
+const DOC_BLOCK: &[u8] = b"[doc = ";
 
 const EMPTY_COMMENT: &str = "//";
 const EMPTY_DOC_COMMENT: &str = "///";
@@ -133,7 +135,7 @@ impl<'a> CopyingCursor<'a> {
 
     fn try_skip_comment(&mut self) -> bool {
         match self.next() {
-            // Line comment of some form (we don't care which
+            // Line comment of some form (we don't care which)
             Some(b'/') => {
                 while let Some(ch) = self.next() {
                     if ch == b'\n' {
@@ -218,6 +220,38 @@ impl<'a> CopyingCursor<'a> {
         true
     }
 
+    fn skip_blank_param(&mut self) -> Result<(), Error> {
+        while let Some(ch) = self.next() {
+            if ch == b')' {
+                return Ok(());
+            }
+        }
+
+        Err(Error::BadSourceCode("Unexpected end of input".to_string()))
+    }
+
+    fn try_skip_string(&mut self) -> Result<Option<u8>, Error> {
+        match self.next() {
+            // Regular string
+            Some(b'"') => {
+                self.skip_string();
+                Ok(None)
+            }
+            // Raw string
+            Some(b'r') => {
+                if self.try_skip_raw_string() {
+                    Ok(None)
+                } else {
+                    Err(Error::BadSourceCode("Bad raw string".to_string()))
+                }
+            }
+            // Something else
+            Some(ch) => Ok(Some(ch)),
+            // EOF
+            None => Err(Error::BadSourceCode("Unexpected end of input".to_string())),
+        }
+    }
+
     fn try_match(&mut self, sl: &[u8]) -> bool {
         let iter = sl.iter();
 
@@ -290,67 +324,14 @@ impl<'a> CopyingCursor<'a> {
         Ok(())
     }
 
-    fn try_match_replace<F>(&mut self, prefix: &[u8], f: F) -> Result<bool, Error>
-    where
-        F: FnOnce(&mut String, &str, &str) -> Result<(), Error>,
-    {
-        // We already matched 2 chars before we got here (but didn't 'next()' after last match)
-        let mark_start_ident = self.curr_idx - 1;
-
-        if !self.try_match(prefix) {
-            return Ok(false);
-        }
-        let mark_start_value = self.curr_idx + 1;
-
-        // TODO: Not good enough - needs to skip string for comment and integer for blank
-
-        // Match until we find the end symbol
-        while let Some(ch) = self.next() {
-            if ch == b')' {
-                // End of value (exclusive)
-                let mark_end_value = self.curr_idx;
-
-                if let Some(ch) = self.next() {
-                    //
-                    if ch != b';' {
-                        break;
-                    }
-
-                    if let Some(ending) = self.detect_line_ending() {
-                        // Mark end of ident here (inclusive)
-                        let mark_end_ident = self.curr_idx + 1;
-
-                        // Copy everything up until this marker
-                        self.copy_to_marker(mark_start_ident, mark_end_ident);
-
-                        // Parse and output
-                        f(
-                            &mut self.buffer,
-                            &self.source[mark_start_value..mark_end_value],
-                            ending,
-                        )?;
-                        return Ok(true);
-                    } else {
-                        break;
-                    }
-                } else {
-                    // Again another not great exit, but again ')' is not a top level char of interest
-                    break;
-                }
-            }
-        }
-
-        Ok(false)
-    }
-
-    // NOTE: Tempting to merge with process_comments but that one is called from a closure
-    // and can't have more params
+    // NOTE: Tempting to merge with process_comments but since called from closure it is
+    // a bit trickier than it looks (would have to expand args process_blanks takes too)
     fn process_doc_block(buffer: &mut String, s: &str, ending: &str) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
             buffer.push_str(EMPTY_DOC_COMMENT);
             buffer.push_str(ending);
-        // Multiple comments
+            // Multiple comments
         } else {
             let s: syn::LitStr = syn::parse_str(s)?;
             let comment = s.value();
@@ -369,42 +350,129 @@ impl<'a> CopyingCursor<'a> {
         Ok(())
     }
 
-    fn try_doc_block_match_replace(&mut self) -> Result<bool, Error> {
-        // We already matched 1 char before we got here (but didn't 'next()' after)
-        let mark_start_ident = self.curr_idx;
+    fn try_match_prefix(&mut self, chars_matched: usize, prefix: &[u8]) -> Option<(usize, usize)> {
+        // We already matched X chars before we got here (but didn't 'next()' after last match so minus 1)
+        let mark_start_ident = self.curr_idx - (chars_matched - 1);
 
-        if !self.try_match(DOC_BLOCK) {
-            return Ok(false);
+        if self.try_match(prefix) {
+            let mark_start_value = self.curr_idx + 1;
+            Some((mark_start_ident, mark_start_value))
+        } else {
+            None
         }
-        let mark_start_value = self.curr_idx + 1;
+    }
 
-        // Match until we find the end symbol
-        while let Some(ch) = self.next() {
-            if ch == b']' {
-                // End of string (exclusive)
-                let mark_end_value = self.curr_idx;
+    fn try_replace<F>(
+        &mut self,
+        chars_matched: usize,
+        suffix: &[u8],
+        mark_start_ident: usize,
+        mark_start_value: usize,
+        f: F,
+    ) -> Result<(), Error>
+    where
+        F: FnOnce(&mut String, &str, &str) -> Result<(), Error>,
+    {
+        // End of value (exclusive)
+        let mark_end_value = self.curr_idx + (1 - chars_matched);
 
-                if let Some(ending) = self.detect_line_ending() {
-                    // Mark end of ident here (exclusive)
-                    let mark_end_ident = self.curr_idx + 1;
+        if !self.try_match(suffix) {
+            return Err(Error::BadSourceCode(
+                "Unable to match suffix on doc block or marker.".to_string(),
+            ));
+        }
 
-                    // Copy everything up until this marker
-                    self.copy_to_marker(mark_start_ident, mark_end_ident);
+        if let Some(ending) = self.detect_line_ending() {
+            // Mark end of ident here (inclusive)
+            let mark_end_ident = self.curr_idx + 1;
 
-                    // Parse and output
-                    Self::process_doc_block(
-                        &mut self.buffer,
-                        &self.source[mark_start_value..mark_end_value],
-                        ending,
-                    )?;
-                    return Ok(true);
-                } else {
-                    break;
+            // Copy everything up until this marker
+            self.copy_to_marker(mark_start_ident, mark_end_ident);
+
+            // Parse and output
+            f(
+                &mut self.buffer,
+                &self.source[mark_start_value..mark_end_value],
+                ending,
+            )?;
+            Ok(())
+        } else {
+            Err(Error::BadSourceCode("Expected CR or LF".to_string()))
+        }
+    }
+
+    fn try_replace_blank_marker(&mut self) -> Result<bool, Error> {
+        match self.try_match_prefix(2, BLANK_IDENT) {
+            Some((ident_start, value_start)) => {
+                self.skip_blank_param()?;
+
+                self.try_replace(
+                    1,
+                    b";",
+                    ident_start,
+                    value_start,
+                    CopyingCursor::process_blanks,
+                )?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn try_replace_comment_marker(&mut self) -> Result<bool, Error> {
+        match self.try_match_prefix(2, COMMENT_IDENT) {
+            Some((ident_start, value_start)) => {
+                // Make sure it is empty or a string
+                let (matched, suffix) = match self.try_skip_string()? {
+                    // String
+                    None => (0, b");" as &[u8]),
+                    // Empty
+                    Some(b')') => (1, b";" as &[u8]),
+                    Some(ch) => {
+                        return Err(Error::BadSourceCode(format!(
+                            "Expected ')' or string, but got: {}",
+                            ch as char
+                        )))
+                    }
+                };
+
+                self.try_replace(
+                    matched,
+                    suffix,
+                    ident_start,
+                    value_start,
+                    CopyingCursor::process_comments,
+                )?;
+                Ok(true)
+            }
+            None => Ok(false),
+        }
+    }
+
+    fn try_replace_doc_block(&mut self) -> Result<bool, Error> {
+        match self.try_match_prefix(1, DOC_BLOCK) {
+            Some((ident_start, value_start)) => {
+                // Make sure it is a string
+                match self.try_skip_string()? {
+                    // String
+                    None => {
+                        self.try_replace(
+                            0,
+                            b"]",
+                            ident_start,
+                            value_start,
+                            CopyingCursor::process_doc_block,
+                        )?;
+                        Ok(true)
+                    }
+                    Some(ch) => Err(Error::BadSourceCode(format!(
+                        "Expected string, but got: {}",
+                        ch as char
+                    ))),
                 }
             }
+            None => Ok(false),
         }
-
-        Ok(false)
     }
 }
 
@@ -437,18 +505,13 @@ pub(crate) fn replace_markers(s: &str, replace_doc_blocks: bool) -> Result<Cow<s
                         match cursor.curr {
                             // Possible blank marker
                             b'b' => {
-                                if !cursor
-                                    .try_match_replace(BLANK_IDENT, CopyingCursor::process_blanks)?
-                                {
+                                if !cursor.try_replace_blank_marker()? {
                                     continue;
                                 }
                             }
                             // Possible comment marker
                             b'c' => {
-                                if !cursor.try_match_replace(
-                                    COMMENT_IDENT,
-                                    CopyingCursor::process_comments,
-                                )? {
+                                if !cursor.try_replace_comment_marker()? {
                                     continue;
                                 }
                             }
@@ -460,7 +523,7 @@ pub(crate) fn replace_markers(s: &str, replace_doc_blocks: bool) -> Result<Cow<s
                     }
                     // Possible doc block
                     b'#' if replace_doc_blocks => {
-                        if !cursor.try_doc_block_match_replace()? {
+                        if !cursor.try_replace_doc_block()? {
                             continue;
                         }
                     }
