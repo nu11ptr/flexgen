@@ -1,7 +1,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 
-//! A Rust source code formatting crate with a unified interface for string, file, and  
+//! A Rust source code formatting crate with a unified interface for string, file, and
 //! [TokenStream](proc_macro2::TokenStream) input. It currently supports
 //! [rustfmt](https://crates.io/crates/rustfmt-nightly) and
 //! [prettyplease](https://crates.io/crates/prettyplease).
@@ -36,6 +36,7 @@ mod replace {
 }
 
 // Trick to test README samples (from: https://github.com/rust-lang/cargo/issues/383#issuecomment-720873790)
+#[cfg(feature = "post_process")]
 #[cfg(doctest)]
 mod test_readme {
     macro_rules! external_doc_test {
@@ -60,6 +61,46 @@ use std::{env, fmt, fs, io, string};
 
 const RUST_FMT: &str = "rustfmt";
 const RUST_FMT_KEY: &str = "RUSTFMT";
+
+// *** Marker macros ***
+
+/// A "marker" macro used to mark locations in the source code where blank lines should be inserted.
+/// If no parameter is given, one blank line is assumed, otherwise the integer literal specified
+/// gives the # of blank lines to insert.
+///
+/// It is important to understand this is NOT actually a macro that is executed. In fact, it is just
+/// here for documentation purposes. Instead, this works as a raw set of tokens in the source code
+/// that we match against verbatim. This means it cannot be renamed on import for example, and it MUST be
+/// invoked as `_blank_!(`, then an optional Rust integer literal, and then `);`. These are matched exactly
+/// and no excess whitespace is allowed or it won't be matched.
+///
+/// Actually executing this macro has no effect and it is not meant to even be imported.
+#[cfg(feature = "post_process")]
+#[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
+#[macro_export]
+macro_rules! _blank_ {
+    () => {};
+    ($lit:literal) => {};
+}
+
+/// A "marker" macro used to mark locations in the source code where comments should be inserted.
+/// If no parameter is given, a single blank comment is assumed, otherwise the string literal
+/// specified is broken into lines and those comments will be inserted individually.
+///
+/// It is important to understand this is NOT actually a macro that is executed. In fact, it is just
+/// here for documentation purposes. Instead, this works as a raw set of tokens in the source code
+/// that we match against verbatim. This means it cannot be renamed on import for example, and it MUST be
+/// invoked as `_comment_!(`, then an optional Rust `str` literal, and then `);`. These are matched exactly
+/// and no excess whitespace is allowed or it won't be matched.
+///
+/// Actually executing this macro has no effect and it is not meant to even be imported.
+#[cfg(feature = "post_process")]
+#[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
+#[macro_export]
+macro_rules! _comment_ {
+    () => {};
+    ($lit:literal) => {};
+}
 
 // *** Error ***
 
@@ -151,12 +192,12 @@ pub enum PostProcess {
     /// No post processing after formatting (default)
     None,
 
-    /// Replace `_blank_!` and `_comment_!` markers
+    /// Replace [_blank_!] and [_comment_!] markers
     #[cfg(feature = "post_process")]
     #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
     ReplaceMarkers,
 
-    /// Replace `_blank_!` and `_comment_!` markers and  `#[doc = ""]` (with `///`)
+    /// Replace [_blank_!] and [_comment_!] markers and  `#[doc = ""]` (with `///`)
     #[cfg(feature = "post_process")]
     #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
     ReplaceMarkersAndDocBlocks,
@@ -197,7 +238,7 @@ impl Default for PostProcess {
 // *** Config ***
 
 /// The configuration for the formatters. Most of the options are for `rustfmt` only (they are ignored
-/// by [PrettyPlease], but [PostProcess] options are used by both formatters.
+/// by [PrettyPlease], but [PostProcess] options are used by both formatters).
 #[derive(Clone, Debug, Default)]
 pub struct Config<K, P, V>
 where
@@ -212,17 +253,17 @@ where
 }
 
 impl<'a, 'b> Config<&'a str, &'b str, &'a str> {
-    /// Creates a new blank configuration with basic type assumptions
+    /// Creates a new blank configuration with `&str` for all type params
     /// (if you wish to use different types, use [new](Config::new) instead)
     #[inline]
-    pub fn new_basic() -> Self {
+    pub fn new_str() -> Self {
         Self::new()
     }
 
-    /// Creates a new configuration from the given [HashMap] of options with certain basic type
-    /// assumptions (if you wish to use different types, use [from_hash_map](Config::from_hash_map) instead)
+    /// Creates a new configuration from the given [HashMap] of options using `&str` for all type params
+    /// (if you wish to use different types, use [from_hash_map](Config::from_hash_map) instead)
     #[inline]
-    pub fn from_hash_map_basic(options: HashMap<&'a str, &'a str>) -> Self {
+    pub fn from_hash_map_str(options: HashMap<&'a str, &'a str>) -> Self {
         Self::from_hash_map(options)
     }
 }
@@ -250,7 +291,7 @@ where
         }
     }
 
-    /// Set the path to the `rustfmt` binary to use (`RustFmt` only, ignored by `PrettyPlease`)
+    /// Set the path to the `rustfmt` binary to use (`RustFmt` only, ignored by `PrettyPlease`).
     /// This takes precedence over the `RUSTFMT` environment variable, if specified
     #[inline]
     pub fn rust_fmt_path(mut self, path: P) -> Self {
@@ -272,7 +313,7 @@ where
         self
     }
 
-    /// Set a key/value pair option (`RustFmt` only, ignored by `PrettyPlease`)
+    /// Set a key/value pair option (`RustFmt` only, ignored by `PrettyPlease`).
     /// See [here](https://rust-lang.github.io/rustfmt/) for a list of possible options
     #[inline]
     pub fn option(mut self, key: K, value: V) -> Self {
@@ -352,7 +393,7 @@ pub trait Formatter {
 ///
 /// let source = r#"use std::marker; use std::io; mod test; mod impls;"#;
 ///
-/// let mut config = Config::new_basic()
+/// let mut config = Config::new_str()
 ///     .edition(Edition::Rust2018)
 ///     .option("reorder_imports", "false")
 ///     .option("reorder_modules", "false");
@@ -639,13 +680,74 @@ impl Formatter for PrettyPlease {
 mod tests {
     use std::io::{Read, Seek, Write};
 
+    use pretty_assertions::assert_eq;
+
+    #[cfg(feature = "post_process")]
+    use crate::PostProcess;
     #[cfg(feature = "pretty_please")]
     use crate::PrettyPlease;
-    use crate::{Error, Formatter, RustFmt};
+    use crate::{Config, Error, Formatter, RustFmt, RUST_FMT, RUST_FMT_KEY};
 
-    fn format_file(fmt: impl Formatter) {
+    const PLAIN_EXPECTED: &str = r#"#[doc = " This is main"]
+fn main() {
+    _comment_!("This prints hello world");
+    println!("Hello World!");
+    _blank_!();
+}
+"#;
+    #[cfg(feature = "pretty_please")]
+    const PLAIN_PP_EXPECTED: &str = r#"/// This is main
+fn main() {
+    _comment_!("This prints hello world");
+    println!("Hello World!");
+    _blank_!();
+}
+"#;
+    #[cfg(feature = "post_process")]
+    const REPLACE_EXPECTED: &str = r#"#[doc = " This is main"]
+fn main() {
+    // This prints hello world
+    println!("Hello World!");
+    
+}
+"#;
+    #[cfg(feature = "post_process")]
+    const REPLACE_BLOCKS_EXPECTED: &str = r#"/// This is main
+fn main() {
+    // This prints hello world
+    println!("Hello World!");
+    
+}
+"#;
+
+    #[test]
+    fn rustfmt_bad_env_path() {
+        temp_env::with_var(
+            RUST_FMT_KEY,
+            Some("this_is_never_going_to_be_a_valid_executable"),
+            || match RustFmt::new().format_str("bogus") {
+                Err(Error::IOError(_)) => {}
+                _ => panic!("'rustfmt' should have failed due to bad path"),
+            },
+        );
+    }
+
+    #[test]
+    fn rustfmt_bad_config_path() {
+        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
+            let config =
+                Config::new_str().rust_fmt_path("this_is_never_going_to_be_a_valid_executable");
+            match RustFmt::from_config(config).format_str("bogus") {
+                Err(Error::IOError(_)) => {}
+                _ => panic!("'rustfmt' should have failed due to bad path"),
+            }
+        });
+    }
+
+    fn format_file(fmt: impl Formatter, expected: &str) {
         // Write source code to file
-        let source = r#"fn main() { println!("Hello World!"); }"#;
+        let source = r#"#[doc = " This is main"] fn main() { _comment_!("This prints hello world");
+            println!("Hello World!"); _blank_!(); }"#;
         let mut file = tempfile::NamedTempFile::new().unwrap();
         file.write_all(source.as_bytes()).unwrap();
 
@@ -656,23 +758,56 @@ mod tests {
         let mut actual = String::with_capacity(128);
         file.read_to_string(&mut actual).unwrap();
 
-        let expected = r#"fn main() {
-    println!("Hello World!");
-}
-"#;
-
         assert_eq!(expected, actual);
     }
 
     #[test]
     fn rustfmt_file() {
-        format_file(RustFmt::new());
+        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
+            format_file(RustFmt::new(), PLAIN_EXPECTED);
+        });
     }
 
+    // prettyplease replaces doc blocks by default
     #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplease_file() {
-        format_file(PrettyPlease::new());
+        format_file(PrettyPlease::new(), PLAIN_PP_EXPECTED);
+    }
+
+    #[cfg(feature = "post_process")]
+    #[test]
+    fn rustfmt_file_replace_markers() {
+        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
+            let config = Config::new_str().post_proc(PostProcess::ReplaceMarkers);
+            format_file(RustFmt::from_config(config), REPLACE_EXPECTED);
+        });
+    }
+
+    // prettyplease replaces doc blocks by default
+    #[cfg(feature = "post_process")]
+    #[cfg(feature = "pretty_please")]
+    #[test]
+    fn prettyplease_file_replace_markers() {
+        let config = Config::new_str().post_proc(PostProcess::ReplaceMarkers);
+        format_file(PrettyPlease::from_config(config), REPLACE_BLOCKS_EXPECTED);
+    }
+
+    #[cfg(feature = "post_process")]
+    #[test]
+    fn rustfmt_file_replace_markers_and_docs() {
+        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
+            let config = Config::new_str().post_proc(PostProcess::ReplaceMarkersAndDocBlocks);
+            format_file(RustFmt::from_config(config), REPLACE_BLOCKS_EXPECTED);
+        });
+    }
+
+    #[cfg(feature = "post_process")]
+    #[cfg(feature = "pretty_please")]
+    #[test]
+    fn prettyplease_file_replace_markers_and_docs() {
+        let config = Config::new_str().post_proc(PostProcess::ReplaceMarkersAndDocBlocks);
+        format_file(PrettyPlease::from_config(config), REPLACE_BLOCKS_EXPECTED);
     }
 
     fn bad_format_file(fmt: impl Formatter) {
@@ -689,7 +824,9 @@ mod tests {
 
     #[test]
     fn rustfmt_bad_file() {
-        bad_format_file(RustFmt::new());
+        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
+            bad_format_file(RustFmt::new());
+        });
     }
 
     #[cfg(feature = "pretty_please")]

@@ -1,6 +1,6 @@
 [package]
 name = "rust-format"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A Rust source code formatting crate with a unified interface for string, file, and TokenStream input"
@@ -28,5 +28,5 @@ syn = { version = "1.0", default-features = false, optional = true }
 [dev-dependencies]
 pretty_assertions = "1.2"
 quote = "1.0"
-# temp-env = "0.2"
+temp-env = "0.2"
 tempfile = "3.3"

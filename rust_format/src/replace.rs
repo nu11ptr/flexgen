@@ -10,9 +10,8 @@ const COMMENT_IDENT: &[u8] = b"omment_!(";
 const DOC_BLOCK: &[u8] = b"[doc = ";
 
 const EMPTY_COMMENT: &str = "//";
-const EMPTY_DOC_COMMENT: &str = "///";
 const COMMENT_START: &str = "// ";
-const DOC_COMMENT_START: &str = "/// ";
+const DOC_COMMENT: &str = "///";
 const LF_STR: &str = "\n";
 const CRLF_STR: &str = "\r\n";
 
@@ -332,12 +331,12 @@ impl<'a> CopyingCursor<'a> {
         Ok(())
     }
 
-    // NOTE: Tempting to merge with process_comments but since called from closure it is
-    // a bit trickier than it looks (would have to expand args on `process_blanks` as well by two)
+    // This is slightly different than comment in that we don't prepend a space but need to translate
+    // the doc block literally (#[doc = "test"] == ///test <-- no prepended space)
     fn process_doc_block(buffer: &mut String, s: &str, ending: &str) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
-            buffer.push_str(EMPTY_DOC_COMMENT);
+            buffer.push_str(DOC_COMMENT);
             buffer.push_str(ending);
             // Multiple comments
         } else {
@@ -346,16 +345,12 @@ impl<'a> CopyingCursor<'a> {
 
             // Blank comment after parsing
             if comment.is_empty() {
-                buffer.push_str(EMPTY_DOC_COMMENT);
+                buffer.push_str(DOC_COMMENT);
                 buffer.push_str(ending);
             } else {
                 for line in comment.lines() {
-                    if line.is_empty() {
-                        buffer.push_str(EMPTY_DOC_COMMENT);
-                    } else {
-                        buffer.push_str(DOC_COMMENT_START);
-                        buffer.push_str(line);
-                    }
+                    buffer.push_str(DOC_COMMENT);
+                    buffer.push_str(line);
                     buffer.push_str(ending);
                 }
             }
@@ -692,9 +687,9 @@ _blank!_;
         let source = r####"// _blank!_(5);
 
 /* not a nested comment */
-#[doc = r#"This is a main function"#]
-#[doc = r#"This is two doc
-comments"#]
+#[doc = r#" This is a main function"#]
+#[doc = r#" This is two doc
+ comments"#]
 #[cfg(feature = "main")]
 #[doc(hidden)]
 fn main() {
@@ -703,7 +698,7 @@ fn main() {
     println!("hello \nworld");
 }
 
-#[doc = "this is\n\nthree doc comments"]
+#[doc = " this is\n\n three doc comments"]
 fn test() {
 }
 _blank!_;
