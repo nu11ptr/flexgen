@@ -77,10 +77,10 @@ impl<'a> CopyingCursor<'a> {
     #[inline]
     fn copy_to_marker(&mut self, marker: usize, new_start_idx: usize) {
         if marker > self.start_idx {
-            // Copy inclusive of marker position
+            // Copy exclusive of marker position
             self.buffer.push_str(&self.source[self.start_idx..marker]);
-            self.start_idx = new_start_idx;
         }
+        self.start_idx = new_start_idx;
     }
 
     fn into_buffer(mut self) -> Cow<'a, str> {
@@ -161,8 +161,8 @@ impl<'a> CopyingCursor<'a> {
         while let Some(ch) = self.next() {
             match ch {
                 b'"' if !in_escape => break,
-                // Toggle every time we see a backslash
-                b'\\' => in_escape = !in_escape,
+                b'\\' if !in_escape => in_escape = true,
+                _ if in_escape => in_escape = false,
                 _ => {}
             }
         }
@@ -547,9 +547,11 @@ pub(crate) fn replace_markers(s: &str, replace_doc_blocks: bool) -> Result<Cow<s
 
 #[cfg(test)]
 mod tests {
-    use crate::replace::replace_markers;
+    use std::borrow::Cow;
 
     use pretty_assertions::assert_eq;
+
+    use crate::replace::replace_markers;
 
     #[test]
     fn blank() {
@@ -559,6 +561,7 @@ mod tests {
         let expected = source;
 
         assert_eq!(expected, actual);
+        assert!(matches!(actual, Cow::Borrowed(_)));
     }
 
     #[test]
@@ -579,6 +582,7 @@ _blank!_;
         let expected = source;
 
         assert_eq!(expected, actual);
+        assert!(matches!(actual, Cow::Borrowed(_)));
     }
 
     #[test]
@@ -587,13 +591,17 @@ _blank!_;
 
 /* /* nested comment */ */
 _comment_!("comment 1\n\ncomment 2");
-_comment!("skip this");        
+_comment_!("test");
+_comment!("skip this");
 /// This is a main function
 fn main() {
     println!(r##"hello raw world!"##);
     _comment_!();
     println!("hello \nworld");
 }
+
+_comment_!(r#"This is two
+comments"#);
 _blank!_;
 "####;
 
@@ -604,13 +612,17 @@ _blank!_;
 // comment 1
 //
 // comment 2
-_comment!("skip this");        
+// test
+_comment!("skip this");
 /// This is a main function
 fn main() {
     println!(r##"hello raw world!"##);
     //
     println!("hello \nworld");
 }
+
+// This is two
+// comments
 _blank!_;
 "####;
 
@@ -630,6 +642,8 @@ fn main() {
     _blank_!();
     println!("hello \nworld");
 }
+
+_blank_!(2);
 _blank!_;
 "####;
 
@@ -646,6 +660,9 @@ fn main() {
     
     println!("hello \nworld");
 }
+
+
+
 _blank!_;
 "####;
 
@@ -658,9 +675,15 @@ _blank!_;
 
 /* /* nested comment */ */
 #[doc = r#"This is a main function"#]
+#[doc = r#"This is two doc
+comments"#]
 fn main() {
     println!(r##"hello raw world!"##);
     println!("hello \nworld");
+}
+
+#[doc = "this is also\ntwo doc comments"]
+fn test() {
 }
 _blank!_;
 "####;
@@ -670,9 +693,16 @@ _blank!_;
 
 /* /* nested comment */ */
 /// This is a main function
+/// This is two doc
+/// comments
 fn main() {
     println!(r##"hello raw world!"##);
     println!("hello \nworld");
+}
+
+/// this is also
+/// two doc comments
+fn test() {
 }
 _blank!_;
 "####;
