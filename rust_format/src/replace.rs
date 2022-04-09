@@ -203,6 +203,7 @@ impl<'a> CopyingCursor<'a> {
         // the correct # of them
         while let Some(ch) = self.next() {
             match (ch, state) {
+                (b'"', State::InRawComment) if pads == 0 => break,
                 (b'"', State::InRawComment) => state = State::MaybeEndingComment(0),
                 (b'#', State::MaybeEndingComment(pads_seen)) => {
                     let pads_seen = pads_seen + 1;
@@ -309,15 +310,21 @@ impl<'a> CopyingCursor<'a> {
             let s: syn::LitStr = syn::parse_str(s)?;
             let comment = s.value();
 
-            for line in comment.lines() {
-                if line.is_empty() {
-                    buffer.push_str(EMPTY_COMMENT);
-                } else {
-                    buffer.push_str(COMMENT_START);
-                    buffer.push_str(line);
-                }
-
+            // Blank comment after parsing
+            if comment.is_empty() {
+                buffer.push_str(EMPTY_COMMENT);
                 buffer.push_str(ending);
+            } else {
+                for line in comment.lines() {
+                    if line.is_empty() {
+                        buffer.push_str(EMPTY_COMMENT);
+                    } else {
+                        buffer.push_str(COMMENT_START);
+                        buffer.push_str(line);
+                    }
+
+                    buffer.push_str(ending);
+                }
             }
         }
 
@@ -325,7 +332,7 @@ impl<'a> CopyingCursor<'a> {
     }
 
     // NOTE: Tempting to merge with process_comments but since called from closure it is
-    // a bit trickier than it looks (would have to expand args process_blanks takes too)
+    // a bit trickier than it looks (would have to expand args on `process_blanks` as well by two)
     fn process_doc_block(buffer: &mut String, s: &str, ending: &str) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
@@ -336,14 +343,20 @@ impl<'a> CopyingCursor<'a> {
             let s: syn::LitStr = syn::parse_str(s)?;
             let comment = s.value();
 
-            for line in comment.lines() {
-                if line.is_empty() {
-                    buffer.push_str(EMPTY_DOC_COMMENT);
-                } else {
-                    buffer.push_str(DOC_COMMENT_START);
-                    buffer.push_str(line);
-                }
+            // Blank comment after parsing
+            if comment.is_empty() {
+                buffer.push_str(EMPTY_DOC_COMMENT);
                 buffer.push_str(ending);
+            } else {
+                for line in comment.lines() {
+                    if line.is_empty() {
+                        buffer.push_str(EMPTY_DOC_COMMENT);
+                    } else {
+                        buffer.push_str(DOC_COMMENT_START);
+                        buffer.push_str(line);
+                    }
+                    buffer.push_str(ending);
+                }
             }
         }
 
@@ -552,6 +565,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use crate::replace::replace_markers;
+    use crate::Error;
 
     #[test]
     fn blank() {
@@ -596,6 +610,7 @@ _comment!("skip this");
 /// This is a main function
 fn main() {
     println!(r##"hello raw world!"##);
+    _comment_!(r"");
     _comment_!();
     println!("hello \nworld");
 }
@@ -618,6 +633,7 @@ _comment!("skip this");
 fn main() {
     println!(r##"hello raw world!"##);
     //
+    //
     println!("hello \nworld");
 }
 
@@ -635,10 +651,11 @@ _blank!_;
 
 /* /* nested comment */ */
 _blank_!(2);
-_blank!("skip this");
+_blank!_("skip this");
 #[doc = "This is a main function"]
 fn main() {
-    println!(r##"hello raw world!"##);
+    let r#test = "hello";
+    println!(r"hello raw world!");
     _blank_!();
     println!("hello \nworld");
 }
@@ -653,10 +670,11 @@ _blank!_;
 /* /* nested comment */ */
 
 
-_blank!("skip this");
+_blank!_("skip this");
 #[doc = "This is a main function"]
 fn main() {
-    println!(r##"hello raw world!"##);
+    let r#test = "hello";
+    println!(r"hello raw world!");
     
     println!("hello \nworld");
 }
@@ -673,16 +691,19 @@ _blank!_;
     fn replace_doc_blocks() {
         let source = r####"// _blank!_(5);
 
-/* /* nested comment */ */
+/* not a nested comment */
 #[doc = r#"This is a main function"#]
 #[doc = r#"This is two doc
 comments"#]
+#[cfg(feature = "main")]
+#[doc(hidden)]
 fn main() {
     println!(r##"hello raw world!"##);
+    #[doc = ""]
     println!("hello \nworld");
 }
 
-#[doc = "this is also\ntwo doc comments"]
+#[doc = "this is\n\nthree doc comments"]
 fn test() {
 }
 _blank!_;
@@ -691,22 +712,67 @@ _blank!_;
         let actual = replace_markers(source, true).unwrap();
         let expected = r####"// _blank!_(5);
 
-/* /* nested comment */ */
+/* not a nested comment */
 /// This is a main function
 /// This is two doc
 /// comments
+#[cfg(feature = "main")]
+#[doc(hidden)]
 fn main() {
     println!(r##"hello raw world!"##);
+    ///
     println!("hello \nworld");
 }
 
-/// this is also
-/// two doc comments
+/// this is
+///
+/// three doc comments
 fn test() {
 }
 _blank!_;
 "####;
 
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replace_crlf() {
+        let source = "_blank_!(2);\r\n";
+        let actual = replace_markers(source, false).unwrap();
+
+        let expected = "\r\n\r\n";
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn marker_end_after_prefix() {
+        assert!(matches!(
+            replace_markers("_blank_!(", false),
+            Err(Error::BadSourceCode(_))
+        ));
+    }
+
+    #[test]
+    fn marker_param_not_string() {
+        assert!(matches!(
+            replace_markers("_comment_!(blah);\n", false),
+            Err(Error::BadSourceCode(_))
+        ));
+    }
+
+    #[test]
+    fn marker_bad_suffix() {
+        assert!(matches!(
+            replace_markers("_comment_!(\"blah\"];\n", false),
+            Err(Error::BadSourceCode(_))
+        ));
+    }
+
+    #[test]
+    fn doc_block_string_not_closed() {
+        assert!(matches!(
+            replace_markers("#[doc = \"test]\n", true),
+            Err(Error::BadSourceCode(_))
+        ));
     }
 }
