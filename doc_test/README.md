@@ -15,7 +15,7 @@ inclusion in generated code.
 
 ```toml
 [dependencies]
-quote-doctest = "0.2"
+quote-doctest = "0.3"
 ```
 
 ## Example
@@ -29,20 +29,20 @@ comments inside a `TokenStream`.
 
 ```rust
 use quote::quote;
-use quote_doctest::{doc_comment, doc_test};
+use quote_doctest::{doc_comment, doc_test, FormatDocTest};
 
 fn main() {
     // Takes any `TokenStream` as input (but typically `quote` would be used)
     let test = doc_test!(quote! {
-        _comment!("Calling fibonacci with 10 returns 55");
+        _comment_!("Calling fibonacci with 10 returns 55");
         assert_eq!(fibonacci(10), 55);
     
-        _blank!();
-        _comment!("Calling fibonacci with 1 simply returns 1");
+        _blank_!();
+        _comment_!("Calling fibonacci with 1 simply returns 1");
         assert_eq!(fibonacci(1), 1);
     }).unwrap();
   
-    let comment = doc_comment("This compares between fib inputs and outputs:\n\n").unwrap();
+    let comment = doc_comment("This compares fib inputs and outputs:\n\n");
   
     // Interpolates into a regular `quote` invocation
     let actual = quote! {
@@ -59,7 +59,7 @@ fn main() {
   
     // This is what is generated:
     let expected = quote! {
-        /// This compares between fib inputs and outputs:
+        /// This compares fib inputs and outputs:
         ///
         /// ```
         /// // Calling fibonacci with 10 returns 55
@@ -77,14 +77,15 @@ fn main() {
         }
     };
   
-    assert_eq!(expected.to_string(), actual.to_string());
+    assert_eq!(expected.format_tokens().unwrap(), actual.format_tokens().unwrap());
 }
 ```
 
 ## Notes
-- It can use both [prettyplease](https://crates.io/crates/prettyplease) 
+- It leverages the [rust-format](https://crates.io/crates/rust-format) crate which can
+ use both [prettyplease](https://crates.io/crates/prettyplease) 
   (default) or the system `rustfmt` for formatting the doctests
-    - It honors the `RUSTFMT` environment variable if set (and using `rustfmt`)
+    - When using `rustfmt`, it honors the `RUSTFMT` environment variable if set
 - Since comments and blank lines are whitespace to the parser, marker macros 
   are used to map out where the comments and blank lines should appear. 
   These will be replaced by comments and blank lines respectively in the 

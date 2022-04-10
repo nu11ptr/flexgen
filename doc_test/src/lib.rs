@@ -1,3 +1,4 @@
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 
 //! Using the [doc_test] macro, we can take any [TokenStream](proc_macro2::TokenStream) and turn it into
@@ -9,19 +10,19 @@
 //!
 //! ```
 //! use quote::quote;
-//! use quote_doctest::{doc_comment, doc_test};
+//! use quote_doctest::{doc_comment, doc_test, FormatDocTest};
 //!
 //! // Takes any `TokenStream` as input (but typically `quote` would be used)
 //! let test = doc_test!(quote! {
-//!     _comment!("Calling fibonacci with 10 returns 55");
+//!     _comment_!("Calling fibonacci with 10 returns 55");
 //!     assert_eq!(fibonacci(10), 55);
 //!
-//!     _blank!();
-//!     _comment!("Calling fibonacci with 1 simply returns 1");
+//!     _blank_!();
+//!     _comment_!("Calling fibonacci with 1 simply returns 1");
 //!     assert_eq!(fibonacci(1), 1);
 //! }).unwrap();
 //!
-//! let comment = doc_comment("This compares between fib inputs and outputs:\n\n").unwrap();
+//! let comment = doc_comment("This compares fib inputs and outputs:\n\n");
 //!
 //! // Interpolates into a regular `quote` invocation
 //! let actual = quote! {
@@ -38,7 +39,7 @@
 //!
 //! // This is what is generated:
 //! let expected = quote! {
-//!     /// This compares between fib inputs and outputs:
+//!     /// This compares fib inputs and outputs:
 //!     ///
 //!     /// ```
 //!     /// // Calling fibonacci with 10 returns 55
@@ -56,7 +57,7 @@
 //!     }
 //! };
 //!
-//! assert_eq!(expected.to_string(), actual.to_string());
+//! assert_eq!(expected.format_tokens().unwrap(), actual.format_tokens().unwrap());
 //! ```
 
 // Trick to test README samples (from: https://github.com/rust-lang/cargo/issues/383#issuecomment-720873790)
@@ -72,26 +73,11 @@ mod test_readme {
     external_doc_test!(include_str!("../README.md"));
 }
 
-use std::io::Write;
-use std::process::{Command, Stdio};
-use std::{cmp, env, error, fmt};
+use std::cmp;
 
 use proc_macro2::TokenStream;
 use quote::{quote, ToTokens};
-
-const RUST_FMT: &str = "rustfmt";
-const RUST_FMT_KEY: &str = "RUSTFMT";
-const CODE_MARKER: &str = "#[doc = r\" ```\"]\n";
-const DOC_COMMENT_START: &str = "#[doc = r\" ";
-const DOC_COMMENT_END: &str = "\"]\n";
-const RAW_DOC_COMMENT_START: &str = "#[doc = r";
-const RAW_DOC_COMMENT_END: &str = "]\n";
-const EMPTY_DOC_COMMENT: &str = "#[doc = r\"\"]\n";
-const COMMENT_START: &str = "// ";
-const EMPTY_COMMENT: &str = "//";
-
-const BLANK_IDENT: &str = "_blank";
-const COMMENT_IDENT: &str = "_comment";
+use rust_format::Formatter as _;
 
 const MIN_BUFF_SIZE: usize = 128;
 
@@ -103,111 +89,73 @@ pub const FORMATTER_INDENT: usize = 4;
 /// to fine tune whether or not formating is used, choose a formatter (either `pretty_please` or `rustfmt`),
 /// or whether a main function generated (it is required if formatting, but one can be specified manually).
 ///
-/// If formatting and using `rustfmt`, by default it will attempt to be located in the system path.
-/// If the `RUSTFMT` environment variable is set, however, that will be used instead.
+/// This macro returns `Result<String, Error>`. An error could be returned if an issue occurs during
+/// the formatting process.
 #[macro_export]
 macro_rules! doc_test {
     ($tokens:expr) => {
-        $crate::__default_doc_test!($tokens)
+        $crate::make_doc_test($tokens, $crate::DocTestOptions::default())
     };
     ($tokens:expr, $options:expr) => {
         $crate::make_doc_test($tokens, $options)
     };
 }
 
-#[cfg(feature = "prettyplease")]
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __default_doc_test {
-    ($tokens:expr) => {
-        $crate::make_doc_test(
-            $tokens,
-            $crate::DocTestOptions::FormatAndGenMain(
-                $crate::Formatter::PrettyPlease,
-                $crate::FORMATTER_INDENT,
-            ),
-        )
-    };
-}
+pub use rust_format::{Error, _blank_, _comment_};
 
-#[cfg(not(feature = "prettyplease"))]
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __default_doc_test {
-    ($tokens:expr) => {
-        $crate::make_doc_test(
-            $tokens,
-            $crate::DocTestOptions::FormatAndGenMain(
-                $crate::Formatter::RustFmt,
-                $crate::FORMATTER_INDENT,
-            ),
-        )
-    };
-}
-
-/// A "marker" macro used to mark locations in the [TokenStream](proc_macro2::TokenStream) where blank
-/// lines should be inserted. If no parameter is given, one blank line is assumed, otherwise the integer
-/// literal specified gives the # of blank lines to insert.
-///
-/// Since these "marker" macros aren't actually executed (or used), they must be called in short form. Using
-/// the fully qualified name or a renamed import will not work. To avoid naming collisions, this macro
-/// has been prefixed with an underscore.
-///
-/// Actually executing this macro has no effect.
-#[macro_export]
-macro_rules! _blank {
-    () => {};
-    ($lit:literal) => {};
-}
-
-/// A "marker" macro used to mark locations in the [TokenStream](proc_macro2::TokenStream) where comments
-/// should be inserted. If no parameter is given, a single blank is assumed, otherwise the string literal
-/// specified is broken into lines and those comments will be inserted individually.
-///
-/// Since these "marker" macros aren't actually executed (or used), they must be called in short form. Using
-/// the fully qualified name or a renamed import will not work. To avoid naming collisions, this macro
-/// has been prefixed with an underscore.
-///
-/// Actually executing this macro has no effect.
-#[macro_export]
-macro_rules! _comment {
-    () => {};
-    ($lit:literal) => {};
-}
-
-// Requires 'extra-traits' feature on syn - can just enable if ever needed for debugging
-// #[derive(Debug)]
-struct DocAttrs {
-    docs: Vec<syn::Attribute>,
-}
-
-impl syn::parse::Parse for DocAttrs {
-    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
-        let docs = input.call(syn::Attribute::parse_outer)?;
-        Ok(Self { docs })
-    }
-}
-
-impl ToTokens for DocAttrs {
-    fn to_tokens(&self, tokens: &mut TokenStream) {
-        for doc in &self.docs {
-            doc.to_tokens(tokens);
-        }
-    }
-}
+// *** Formatter ***
 
 /// The formatter used to format source code - either `prettyplease` or the system `rustfmt`
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub enum Formatter {
     /// Format using `prettyplease` crate
-    #[cfg(feature = "prettyplease")]
-    PrettyPlease,
+    #[cfg(feature = "pretty_please")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "pretty_please")))]
+    PrettyPlease(rust_format::PrettyPlease),
     /// Format by calling out to the system `rustfmt`
-    RustFmt,
+    RustFmt(rust_format::RustFmt),
+}
+
+impl Formatter {
+    /// Creates a basic default `rustfmt` `Formatter` instance that automatically strips
+    /// markers from the source code
+    pub fn new_rust_fmt() -> Self {
+        let config =
+            rust_format::Config::new_str().post_proc(rust_format::PostProcess::ReplaceMarkers);
+        let rust_fmt = rust_format::RustFmt::from_config(config);
+        Formatter::RustFmt(rust_fmt)
+    }
+
+    /// Creates a basic default `prettyplease` `Formatter` instance that automatically strips
+    /// markers from the source code
+    #[cfg(feature = "pretty_please")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "pretty_please")))]
+    pub fn new_pretty_please() -> Self {
+        let config =
+            rust_format::Config::new_str().post_proc(rust_format::PostProcess::ReplaceMarkers);
+        let rust_fmt = rust_format::PrettyPlease::from_config(config);
+        Formatter::PrettyPlease(rust_fmt)
+    }
+}
+
+#[cfg(not(feature = "pretty_please"))]
+impl Default for Formatter {
+    #[inline]
+    fn default() -> Self {
+        Formatter::new_rust_fmt()
+    }
+}
+
+#[cfg(feature = "pretty_please")]
+impl Default for Formatter {
+    #[inline]
+    fn default() -> Self {
+        Formatter::new_pretty_please()
+    }
 }
 
 /// Optional enum passed to [doc_test] for different configuration options
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub enum DocTestOptions {
     /// TokenStream is not formatted and no main function is generated. The doctest will be a single line
     NoFormatOrGenMain,
@@ -221,6 +169,22 @@ pub enum DocTestOptions {
 }
 
 impl DocTestOptions {
+    /// Creates a basic default `rustfmt` `DocTestOptions` instance that generates main,
+    /// formats, and then strips the main function
+    #[inline]
+    pub fn new_rust_fmt() -> Self {
+        DocTestOptions::FormatAndGenMain(Formatter::new_rust_fmt(), FORMATTER_INDENT)
+    }
+
+    /// Creates a basic default `prettyplease` `DocTestOptions` instance that generates main,
+    /// formats, and then strips the main function
+    #[cfg(feature = "pretty_please")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "pretty_please")))]
+    #[inline]
+    pub fn new_pretty_please() -> Self {
+        DocTestOptions::FormatAndGenMain(Formatter::new_pretty_please(), FORMATTER_INDENT)
+    }
+
     #[inline]
     fn options(self) -> (Option<Formatter>, bool, usize) {
         match self {
@@ -231,202 +195,34 @@ impl DocTestOptions {
     }
 }
 
-/// Describes the kind of error that occurred
-#[derive(Clone, Copy, Debug)]
-pub enum ErrorKind {
-    /// Unable to find or execute the `rustfmt` program
-    UnableToExecRustFmt,
-    /// Unable to write the source code to `rustfmt` stdin
-    UnableToWriteStdin,
-    /// Issues occurred during the execution of `rustfmt`
-    ErrorDuringExec,
-    /// The resulting stdout and stderror from `rustfmt` could not be converted to UTF8
-    UTF8ConversionError,
-    /// An error was encountered parsing the source code. This is often, but not always, reported
-    /// by the formatter. The display string/ contains the output from stderr (`rustfmt`) or error
-    /// display value (`prettyplease` and internal parsiing)
-    BadSourceCode,
-}
-
-impl fmt::Display for ErrorKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ErrorKind::UnableToExecRustFmt => f.write_str("Unable to execute 'rustfmt'"),
-            ErrorKind::UnableToWriteStdin => {
-                f.write_str("An error occurred while writing to 'rustfmt' stdin")
-            }
-            ErrorKind::ErrorDuringExec => {
-                f.write_str("An error occurred while attempting to retrieve 'rustfmt' output")
-            }
-            ErrorKind::UTF8ConversionError => {
-                f.write_str("Unable to convert 'rustfmt' output into UTF8")
-            }
-            ErrorKind::BadSourceCode => {
-                f.write_str("Syntax error - unable to parse the source code")
-            }
-        }
+#[cfg(not(feature = "pretty_please"))]
+impl Default for DocTestOptions {
+    #[inline]
+    fn default() -> Self {
+        DocTestOptions::new_rust_fmt()
     }
 }
 
-/// Error type that is returned when a macro or function fails
-#[derive(Clone, Debug)]
-pub struct Error {
-    /// Describes the kind of error that occurred
-    pub kind: ErrorKind,
-    msg: String,
-}
-
-impl fmt::Display for Error {
+#[cfg(feature = "pretty_please")]
+impl Default for DocTestOptions {
     #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{}: {}", self.kind, self.msg))
-    }
-}
-
-impl error::Error for Error {}
-
-impl Error {
-    #[inline]
-    fn new(kind: ErrorKind, msg: String) -> Self {
-        Self { kind, msg }
+    fn default() -> Self {
+        DocTestOptions::new_pretty_please()
     }
 }
 
 /// Attempts to translate this [TokenStream](proc_macro2::TokenStream) into a [String]. It takes an
-/// optional [Formatter] which formats using either `prettyplease` or `rustfmt`. For `rustfmt`, It defaults
-/// to calling whichever copy it finds via the system path, however, if the `RUSTFMT` environment variable
-/// is set it will use that one. It returns a [String] of the formatted code (or a single line of
-/// unformatted text, if `fmt` is `None`) or an [Error] error, if one occurred.
-pub fn tokens_to_string(tokens: TokenStream, fmt: Option<Formatter>) -> Result<String, Error> {
+/// optional [Formatter] which formats using either `prettyplease` or `rustfmt`. It returns a [String]
+/// of the formatted code (or a single line of unformatted text, if `fmt` is `None`) or an [Error]
+/// error, if one occurred.
+#[inline]
+fn tokens_to_string(tokens: TokenStream, fmt: Option<Formatter>) -> Result<String, Error> {
     match fmt {
-        #[cfg(feature = "prettyplease")]
-        Some(Formatter::PrettyPlease) => prettyplz(tokens),
-        Some(Formatter::RustFmt) => {
-            let (src, _) = rustfmt(tokens)?;
-            Ok(src)
-        }
+        #[cfg(feature = "pretty_please")]
+        Some(Formatter::PrettyPlease(pp)) => pp.format_tokens(tokens),
+        Some(Formatter::RustFmt(rust_fmt)) => rust_fmt.format_tokens(tokens),
         None => Ok(tokens.to_string()),
     }
-}
-
-// We don't have to account for byte strings for either regular or raw because the same handling
-// handles both types (ie. in raw strings the 'b' comes before the 'r')
-enum StringState {
-    NotInString,
-    InString,
-    InStringMaybeInEscape,
-    MaybeStartingRawString(u8),
-    InRawString(u8),
-    MaybeEndingRawString(u8, u8),
-}
-
-impl StringState {
-    #[inline]
-    fn dbl_quote_seen(self) -> (Self, u8) {
-        use StringState::*;
-
-        match self {
-            // Only way to get into a regular string
-            NotInString => (InString, 1),
-            // Only exit for a regular string
-            InString => (NotInString, 0),
-            InStringMaybeInEscape => (InString, 0),
-            // Only way to get into a raw string
-            MaybeStartingRawString(pounds) => (InRawString(pounds), pounds + 1),
-            // Exit possibility #1 for raw string
-            InRawString(0) => (NotInString, 0),
-            InRawString(pounds) => (MaybeEndingRawString(pounds, 0), 0),
-            MaybeEndingRawString(pounds, _) => (InRawString(pounds), 0),
-        }
-    }
-
-    #[inline]
-    fn r_seen(self) -> Self {
-        use StringState::*;
-
-        match self {
-            NotInString => MaybeStartingRawString(0),
-            InStringMaybeInEscape => InString,
-            MaybeStartingRawString(_) => NotInString,
-            MaybeEndingRawString(pounds, _) => InRawString(pounds),
-            state => state,
-        }
-    }
-
-    #[inline]
-    fn pound_seen(self) -> Self {
-        use StringState::*;
-
-        match self {
-            InStringMaybeInEscape => InString,
-            MaybeStartingRawString(pounds) => MaybeStartingRawString(pounds + 1),
-            // Exit possibility #2 for raw string
-            MaybeEndingRawString(pounds, seen) if pounds == (seen + 1) => NotInString,
-            MaybeEndingRawString(pounds, seen) => MaybeEndingRawString(pounds, seen + 1),
-            state => state,
-        }
-    }
-
-    #[inline]
-    fn backslash_seen(self) -> Self {
-        use StringState::*;
-
-        match self {
-            InString => InStringMaybeInEscape,
-            InStringMaybeInEscape => InString,
-            MaybeStartingRawString(_) => NotInString,
-            MaybeEndingRawString(pounds, _) => InRawString(pounds),
-            state => state,
-        }
-    }
-
-    #[inline]
-    fn regular_char(self) -> Self {
-        use StringState::*;
-
-        match self {
-            InStringMaybeInEscape => InString,
-            MaybeStartingRawString(_) => NotInString,
-            MaybeEndingRawString(pounds, _) => InRawString(pounds),
-            state => state,
-        }
-    }
-}
-
-fn encode_doc_comment(buffer: &mut String, line: &str, f: impl FnOnce(&mut String, &str)) {
-    let mut max_pounds = 0;
-    let mut str_state = StringState::NotInString;
-
-    // Calculate max # of pounds we need on our raw string
-    for ch in line.chars() {
-        match ch {
-            '"' => {
-                let (state, pounds) = str_state.dbl_quote_seen();
-                str_state = state;
-                max_pounds = cmp::max(max_pounds, pounds);
-            }
-            'r' => str_state = str_state.r_seen(),
-            '#' => str_state = str_state.pound_seen(),
-            '\\' => str_state = str_state.backslash_seen(),
-            _ => str_state = str_state.regular_char(),
-        }
-    }
-
-    // Start raw string
-    buffer.push_str(RAW_DOC_COMMENT_START);
-    for _ in 0..max_pounds {
-        buffer.push('#');
-    }
-    buffer.push_str("\" ");
-
-    f(buffer, line);
-
-    // End raw string
-    buffer.push('"');
-    for _ in 0..max_pounds {
-        buffer.push('#');
-    }
-    buffer.push_str(RAW_DOC_COMMENT_END);
 }
 
 /// Creates a doc comment for interpolation into a [TokenStream](proc_macro2::TokenStream). It takes
@@ -438,9 +234,9 @@ fn encode_doc_comment(buffer: &mut String, line: &str, f: impl FnOnce(&mut Strin
 ///
 /// ```
 /// use quote::quote;
-/// use quote_doctest::doc_comment;
+/// use quote_doctest::{doc_comment, FormatDocTest};
 ///
-/// let actual = doc_comment("this\nwill be\n\nmultiple comments\n\n").unwrap();
+/// let actual = doc_comment("this\nwill be\n\nmultiple comments\n\n");
 /// let expected = quote! {
 ///     /// this
 ///     /// will be
@@ -449,26 +245,26 @@ fn encode_doc_comment(buffer: &mut String, line: &str, f: impl FnOnce(&mut Strin
 ///     ///
 /// };
 ///
-/// assert_eq!(expected.to_string(), actual.to_string());
+/// assert_eq!(expected.format_tokens().unwrap(), actual.format_tokens().unwrap());
 /// ```
-pub fn doc_comment(comment: impl AsRef<str>) -> Result<TokenStream, Error> {
+pub fn doc_comment(comment: impl AsRef<str>) -> TokenStream {
     let comment = comment.as_ref();
 
-    // Go big - no sense reallocating unnecessarily
+    // Unlikely to be this big, but better than reallocating
     let mut buffer = String::with_capacity(cmp::max(comment.len() * 2, MIN_BUFF_SIZE));
 
-    for comm in comment.lines() {
-        if comm.is_empty() {
-            buffer.push_str(EMPTY_DOC_COMMENT);
-        } else {
-            encode_doc_comment(&mut buffer, comm, |buffer, comm| buffer.push_str(comm));
+    // Build code from lines
+    for line in comment.lines() {
+        // Except for empty lines, all lines should get a space at the front
+        if !line.is_empty() {
+            buffer.push(' ');
         }
+        buffer.push_str(line);
+        buffer.push('\n');
     }
 
-    // Parse into doc attrs and then return final token stream
-    let docs: DocAttrs = syn::parse_str(&buffer)
-        .map_err(|err| Error::new(ErrorKind::BadSourceCode, err.to_string()))?;
-    Ok(docs.to_token_stream())
+    let doc_comment: Vec<_> = buffer.lines().collect();
+    quote! { #( #[doc = #doc_comment] )* }
 }
 
 #[doc(hidden)]
@@ -489,14 +285,18 @@ pub fn make_doc_test(
     let src = tokens_to_string(tokens, fmt)?;
     let lines = to_source_lines(&src, gen_main);
 
-    // Assemble the lines back into a string while transforming the data
-    let prefix = " ".repeat(strip_indent);
-    let doc_test = assemble_doc_test(lines, src.len(), prefix)?;
+    // Assemble the lines back into a string while indenting
+    // NOTE: strip_indent will be zero unless gen_main was set
+    let indent = " ".repeat(strip_indent);
+    let doc_test = assemble_doc_test(lines, src.len(), indent);
+    let doc_test: Vec<_> = doc_test.lines().collect();
 
-    // Parse the new string into document attributes and return a token stream
-    let docs: DocAttrs = syn::parse_str(&doc_test)
-        .map_err(|err| Error::new(ErrorKind::BadSourceCode, err.to_string()))?;
-    Ok(docs.to_token_stream())
+    // Turn back into a token stream and into a doc test
+    Ok(quote! {
+        /// ```
+        #( #[doc = #doc_test] )*
+        /// ```
+    })
 }
 
 fn to_source_lines(src: &str, gen_main: bool) -> Vec<&str> {
@@ -515,155 +315,121 @@ fn to_source_lines(src: &str, gen_main: bool) -> Vec<&str> {
     }
 }
 
-fn assemble_doc_test(lines: Vec<&str>, cap: usize, prefix: String) -> Result<String, Error> {
+fn assemble_doc_test(lines: Vec<&str>, cap: usize, prefix: String) -> String {
     // Unlikely to be this big, but better than reallocating
     let mut buffer = String::with_capacity(cmp::max(cap * 2, MIN_BUFF_SIZE));
 
     // Build code from lines
-    buffer.push_str(CODE_MARKER);
     for mut line in lines {
-        // Strip whitespace left over from main
+        // Strip whitespace left over from main, if any (else noop)
         line = line.strip_prefix(&prefix).unwrap_or(line);
-        process_line(line, &mut buffer)?;
-    }
-    buffer.push_str(CODE_MARKER);
 
-    Ok(buffer)
-}
-
-fn process_line(line: &str, buffer: &mut String) -> Result<(), Error> {
-    if !line.is_empty() {
-        // First, see if this is one of our special macros (it won't parse unless we strip semicolon)
-        if let Ok(m) = syn::parse_str::<syn::Macro>(&line[..line.len() - 1]) {
-            // Our comment macro
-            if m.path.is_ident(COMMENT_IDENT) {
-                // Blank comment
-                if m.tokens.is_empty() {
-                    buffer.push_str(DOC_COMMENT_START);
-                    buffer.push_str(EMPTY_COMMENT);
-                    buffer.push_str(DOC_COMMENT_END);
-
-                    return Ok(());
-                // Actual comments present
-                } else {
-                    let comment = m
-                        .parse_body::<syn::LitStr>()
-                        .map_err(|err| Error::new(ErrorKind::BadSourceCode, err.to_string()))?
-                        .value();
-
-                    // Insert one comment per line
-                    for comm in comment.lines() {
-                        encode_doc_comment(buffer, comm, |buffer, comm| {
-                            if !comm.is_empty() {
-                                buffer.push_str(COMMENT_START);
-                                buffer.push_str(comm);
-                            } else {
-                                buffer.push_str(EMPTY_COMMENT);
-                            }
-                        });
-                    }
-
-                    return Ok(());
-                }
-            // Our blank macro
-            } else if m.path.is_ident(BLANK_IDENT) {
-                // 1 line
-                let num_lines = if m.tokens.is_empty() {
-                    1u32
-                // Multiple lines (or at least number of specified)
-                } else {
-                    let num_lines = m
-                        .parse_body::<syn::LitInt>()
-                        .map_err(|err| Error::new(ErrorKind::BadSourceCode, err.to_string()))?;
-                    num_lines
-                        .base10_parse()
-                        .map_err(|err| Error::new(ErrorKind::BadSourceCode, err.to_string()))?
-                };
-
-                // Insert correct # of blank lines
-                for _ in 0..num_lines {
-                    buffer.push_str(EMPTY_DOC_COMMENT);
-                    buffer.push('\n');
-                }
-
-                return Ok(());
-            }
+        // Except for empty lines, all lines should get a space at the front
+        if !line.is_empty() {
+            buffer.push(' ');
         }
+        buffer.push_str(line);
+        buffer.push('\n');
     }
 
-    // Allow it to drop through to here from any level of the if above if not matched
-
-    // Regular line processing
-    encode_doc_comment(buffer, line, |buffer, line| buffer.push_str(line));
-    Ok(())
+    buffer
 }
 
-#[cfg(feature = "prettyplease")]
-fn prettyplz(tokens: TokenStream) -> Result<String, Error> {
-    let f = syn::parse2::<syn::File>(tokens)
-        .map_err(|err| Error::new(ErrorKind::BadSourceCode, err.to_string()))?;
-    Ok(prettyplease::unparse(&f))
+#[cfg(not(feature = "pretty_please"))]
+#[inline]
+fn doc_test_formatter() -> impl rust_format::Formatter {
+    let config = rust_format::Config::new_str()
+        .post_proc(rust_format::PostProcess::ReplaceMarkersAndDocBlocks);
+    rust_format::RustFmt::from_config(config)
 }
 
-fn rustfmt(tokens: TokenStream) -> Result<(String, String), Error> {
-    let s = tokens.to_string();
+#[cfg(feature = "pretty_please")]
+#[inline]
+fn doc_test_formatter() -> impl rust_format::Formatter {
+    rust_format::PrettyPlease::default()
+}
 
-    // Use 'rustfmt' specified by the environment var, if specified, else use the default
-    let rustfmt = env::var(RUST_FMT_KEY).unwrap_or_else(|_| RUST_FMT.to_string());
+/// Trait for converting [doc_test] results into a well formatted `String`
+pub trait FormatDocTest: ToTokens {
+    /// Convert results of a [doc_test] (or any other value that implements `ToTokens` that is valid
+    /// Rust source) into a formatted `String`. This will also convert doc blocks (`#[doc = ""]`) into
+    /// doc comments (`///`). This can be useful for display or equality testing in a unit test. An
+    /// error is returned if an issue occurs during the formatting process
+    ///
+    /// NOTE: If `pretty_please` is not enabled then `rustfmt` will be used via the `rust_format` crate
+    /// and when translating doc blocks will also translate any [`_comment_!`] or [`_blank_!`] markers.
+    /// If the source of this function came from [doc_test], these will already be translated anyway,
+    /// but this is mentioned for awareness.
+    fn format_tokens(self) -> Result<String, Error>
+    where
+        Self: Sized,
+    {
+        // We need a function - doc blocks alone won't pass the formatter
+        let doc_test = quote! {
+            #self
+            fn main() {}
+        };
 
-    // Launch rustfmt
-    let mut proc = Command::new(&rustfmt)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| Error::new(ErrorKind::UnableToExecRustFmt, err.to_string()))?;
+        // Format (and translate doc blocks to doc comments
+        let formatter = doc_test_formatter();
+        let source = formatter.format_tokens(doc_test)?;
 
-    // Get stdin and send our source code to it to be formatted
-    // Safety: Can't panic - we captured stdin above
-    let mut stdin = proc.stdin.take().unwrap();
-    stdin
-        .write_all(s.as_bytes())
-        .map_err(|err| Error::new(ErrorKind::UnableToWriteStdin, err.to_string()))?;
-    // Close stdin
-    drop(stdin);
+        // Convert into lines so we trim off the last line (our added main function)
+        let mut lines: Vec<_> = source.lines().collect();
+        // All in one line because there will never be anything inside
+        lines.pop(); // fn main() {}
 
-    // Parse the results and return stdout/stderr
-    let output = proc
-        .wait_with_output()
-        .map_err(|err| Error::new(ErrorKind::ErrorDuringExec, err.to_string()))?;
-    let stderr = String::from_utf8(output.stderr)
-        .map_err(|err| Error::new(ErrorKind::UTF8ConversionError, err.to_string()))?;
+        // Unlikely to be this big, but better than reallocating
+        let mut buffer = String::with_capacity(cmp::max(source.len() * 2, MIN_BUFF_SIZE));
 
-    if output.status.success() {
-        let stdout = String::from_utf8(output.stdout)
-            .map_err(|err| Error::new(ErrorKind::UTF8ConversionError, err.to_string()))?;
-        Ok((stdout, stderr))
-    } else {
-        Err(Error::new(ErrorKind::BadSourceCode, stderr))
+        for line in lines {
+            buffer.push_str(line);
+            buffer.push('\n');
+        }
+
+        buffer.shrink_to_fit();
+        Ok(buffer)
     }
 }
+
+impl<T> FormatDocTest for T where T: ToTokens {}
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
     use quote::quote;
 
     use crate::{
-        tokens_to_string, DocTestOptions, Error, ErrorKind, Formatter, FORMATTER_INDENT, RUST_FMT,
-        RUST_FMT_KEY,
+        tokens_to_string, DocTestOptions, Error, FormatDocTest, Formatter, FORMATTER_INDENT,
     };
 
     #[test]
-    fn rustfmt_format_only() {
-        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
-            format_only(Formatter::RustFmt);
-        });
+    fn doctest_format() {
+        let actual = quote! {
+            /// ```
+            /// assert_eq!(fibonacci(10), 55);
+            /// assert_eq!(fibonacci(1), 1);
+            /// ```
+        };
+
+        let expected = r#"/// ```
+/// assert_eq!(fibonacci(10), 55);
+/// assert_eq!(fibonacci(1), 1);
+/// ```
+"#;
+
+        assert_eq!(expected, actual.format_tokens().unwrap());
     }
 
-    #[cfg(feature = "prettyplease")]
+    #[test]
+    fn rustfmt_format_only() {
+        format_only(Formatter::new_rust_fmt());
+    }
+
+    #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplz_format_only() {
-        format_only(Formatter::PrettyPlease);
+        format_only(Formatter::new_pretty_please());
     }
 
     fn format_only(fmt: Formatter) {
@@ -685,7 +451,10 @@ mod tests {
             /// ```
         };
 
-        assert_eq!(expected.to_string(), actual.to_string());
+        assert_eq!(
+            expected.format_tokens().unwrap(),
+            actual.format_tokens().unwrap()
+        );
     }
 
     #[test]
@@ -704,58 +473,39 @@ mod tests {
             /// ```
         };
 
-        assert_eq!(expected.to_string(), actual.to_string());
-    }
-
-    #[test]
-    fn bad_path_rustfmt() {
-        temp_env::with_var(
-            RUST_FMT_KEY,
-            Some("this_is_never_going_to_be_a_valid_executable"),
-            || match tokens_to_string(quote! {}, Some(Formatter::RustFmt)) {
-                Err(Error {
-                    kind: ErrorKind::UnableToExecRustFmt,
-                    ..
-                }) => {}
-                _ => panic!("'rustfmt' should have failed due to bad path"),
-            },
+        assert_eq!(
+            expected.format_tokens().unwrap(),
+            actual.format_tokens().unwrap()
         );
     }
 
     #[test]
     fn rustfmt_bad_source_code() {
-        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
-            bad_source_code(Formatter::RustFmt);
-        });
+        bad_source_code(Formatter::new_rust_fmt());
     }
 
-    #[cfg(feature = "prettyplease")]
+    #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplz_bad_source_code() {
-        bad_source_code(Formatter::PrettyPlease);
+        bad_source_code(Formatter::new_pretty_please());
     }
 
     fn bad_source_code(fmt: Formatter) {
         match tokens_to_string(quote! {"blah blah blah"}, Some(fmt)) {
-            Err(Error {
-                kind: ErrorKind::BadSourceCode,
-                ..
-            }) => {}
+            Err(Error::BadSourceCode(_)) => {}
             _ => panic!("'rustfmt' should have failed due to bad source code"),
         }
     }
 
     #[test]
     fn rustfmt_comment_marker() {
-        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
-            comment_marker(Formatter::RustFmt);
-        });
+        comment_marker(Formatter::new_rust_fmt());
     }
 
-    #[cfg(feature = "prettyplease")]
+    #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplz_comment_marker() {
-        comment_marker(Formatter::PrettyPlease);
+        comment_marker(Formatter::new_pretty_please());
     }
 
     fn comment_marker(fmt: Formatter) {
@@ -763,8 +513,8 @@ mod tests {
             assert_eq!(fibonacci(10), 55);
 
             // Should translate to a blank line
-            _comment!();
-            _comment!("first line\n\nsecond line");
+            _comment_!();
+            _comment_!("first line\n\nsecond line");
             assert_eq!(fibonacci(1), 1);
         };
 
@@ -785,20 +535,21 @@ mod tests {
             /// ```
         };
 
-        assert_eq!(expected.to_string(), actual.to_string());
+        assert_eq!(
+            expected.format_tokens().unwrap(),
+            actual.format_tokens().unwrap()
+        );
     }
 
     #[test]
     fn rustfmt_blank_marker() {
-        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
-            blank_marker(Formatter::RustFmt);
-        });
+        blank_marker(Formatter::new_rust_fmt());
     }
 
-    #[cfg(feature = "prettyplease")]
+    #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplz_blank_marker() {
-        blank_marker(Formatter::PrettyPlease);
+        blank_marker(Formatter::new_pretty_please());
     }
 
     fn blank_marker(fmt: Formatter) {
@@ -806,11 +557,11 @@ mod tests {
             assert_eq!(fibonacci(10), 55);
 
             // Should translate to a single blank line
-            _blank!();
+            _blank_!();
             assert_eq!(fibonacci(1), 1);
 
             // Should translate to multiple blank lines
-            _blank!(2);
+            _blank_!(2);
         };
 
         let actual = doc_test!(
@@ -829,20 +580,21 @@ mod tests {
             /// ```
         };
 
-        assert_eq!(expected.to_string(), actual.to_string());
+        assert_eq!(
+            expected.format_tokens().unwrap(),
+            actual.format_tokens().unwrap()
+        );
     }
 
     #[test]
     fn rustfmt_inner_string() {
-        temp_env::with_var(RUST_FMT_KEY, Some(RUST_FMT), || {
-            inner_string(Formatter::RustFmt);
-        });
+        inner_string(Formatter::new_rust_fmt());
     }
 
-    #[cfg(feature = "prettyplease")]
+    #[cfg(feature = "pretty_please")]
     #[test]
     fn prettyplz_inner_string() {
-        inner_string(Formatter::PrettyPlease);
+        inner_string(Formatter::new_pretty_please());
     }
 
     fn inner_string(fmt: Formatter) {
@@ -896,6 +648,9 @@ mod tests {
             /// ```
         };
 
-        assert_eq!(expected.to_string(), actual.to_string());
+        assert_eq!(
+            expected.format_tokens().unwrap(),
+            actual.format_tokens().unwrap()
+        );
     }
 }

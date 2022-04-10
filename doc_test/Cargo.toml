@@ -1,6 +1,6 @@
 [package]
 name = "quote-doctest"
-version = "0.2.2"
+version = "0.3.0"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A simple doctest generator for quote"
@@ -11,14 +11,18 @@ categories = ["development-tools::procedural-macro-helpers"]
 readme = "README.md"
 edition = "2021"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
-default = ["prettyplease"]
+default = ["pretty_please"]
+pretty_please = ["rust-format/pretty_please"]
 
 [dependencies]
-prettyplease = { version = "0.1", optional = true }
-proc-macro2 = "1"
-quote = "1"
-syn = { version = "1", default-features = false, features = [ "full", "parsing", "printing" ] }
+proc-macro2 = "1.0"
+quote = "1.0"
+rust-format = { version = "0.3", features = ["post_process", "token_stream"] }
 
 [dev-dependencies]
-temp-env = "0.2"
+pretty_assertions = "1.2"
