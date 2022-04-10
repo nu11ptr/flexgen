@@ -3,7 +3,7 @@
 [![Crate](https://img.shields.io/crates/v/rust-format)](https://crates.io/crates/rust-format)
 [![Docs](https://docs.rs/rust-format/badge.svg)](https://docs.rs/rust-format)
 
-A Rust source code formatting crate with a unified interface for string, file, and  
+A Rust source code formatting crate with a unified interface for string, file, and 
 [TokenStream](https://docs.rs/proc-macro2/latest/proc_macro2/struct.TokenStream.html)
 input. It currently supports [rustfmt](https://crates.io/crates/rustfmt-nightly) 
 and [prettyplease](https://crates.io/crates/prettyplease). 
@@ -44,15 +44,15 @@ Simple example using default options of `RustFmt`:
 use rust_format::{Formatter, RustFmt};
 
 fn main() {
-  let source = r#"fn main() { println!("Hello World!"); }"#;
+    let source = r#"fn main() { println!("Hello World!"); }"#;
 
-  let actual = RustFmt::default().format_str(source).unwrap();
-  let expected = r#"fn main() {
+    let actual = RustFmt::default().format_str(source).unwrap();
+    let expected = r#"fn main() {
     println!("Hello World!");
 }
 "#;
 
-  assert_eq!(expected, actual);
+    assert_eq!(expected, actual);
 }
 ```
 
@@ -62,39 +62,45 @@ Using a custom configuration:
 use rust_format::{Config, Edition, Formatter, RustFmt};
 
 fn main() {
-  let source = r#"use std::marker; use std::io; mod test; mod impls;"#;
+    let source = r#"use std::marker; use std::io; mod test; mod impls;"#;
   
-  let mut config = Config::new_str()
-    .edition(Edition::Rust2018)
-    .option("reorder_imports", "false")
-    .option("reorder_modules", "false");
-  let rustfmt = RustFmt::from_config(config);
+    let mut config = Config::new_str()
+        .edition(Edition::Rust2018)
+        .option("reorder_imports", "false")
+        .option("reorder_modules", "false");
+    let rustfmt = RustFmt::from_config(config);
   
-  let actual = rustfmt.format_str(source).unwrap();
-  let expected = r#"use std::marker;
+    let actual = rustfmt.format_str(source).unwrap();
+    let expected = r#"use std::marker;
 use std::io;
 mod test;
 mod impls;
 "#;
   
-  assert_eq!(expected, actual);
+    assert_eq!(expected, actual);
 }
 ```
 
 `RustFmt` with post-processing:
 
 ```rust
+use quote::quote;
 use rust_format::{Config, Formatter, PostProcess, RustFmt};
 
 fn main() {
-  let source = r#"#[doc = " This is main"] fn main() { 
-_blank_!(); _comment_!("\nThis prints hello world\n\n"); 
-println!("Hello World!"); }"#;
+    let source = quote! {
+        #[doc = " This is main"] 
+        fn main() { 
+            _blank_!();
+            _comment_!("\nThis prints hello world\n\n"); 
+            println!("Hello World!"); 
+        }
+    };
 
-  let mut config = Config::new_str()
-      .post_proc(PostProcess::ReplaceMarkersAndDocBlocks);
-  let actual = RustFmt::from_config(config).format_str(source).unwrap();
-  let expected = r#"/// This is main
+    let mut config = Config::new_str()
+        .post_proc(PostProcess::ReplaceMarkersAndDocBlocks);
+    let actual = RustFmt::from_config(config).format_tokens(source).unwrap();
+    let expected = r#"/// This is main
 fn main() {
 
     //
@@ -104,7 +110,7 @@ fn main() {
 }
 "#;
 
-  assert_eq!(expected, actual);
+    assert_eq!(expected, actual);
 }
 ```
 

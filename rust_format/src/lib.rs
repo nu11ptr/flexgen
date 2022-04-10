@@ -37,6 +37,7 @@ mod replace {
 
 // Trick to test README samples (from: https://github.com/rust-lang/cargo/issues/383#issuecomment-720873790)
 #[cfg(feature = "post_process")]
+#[cfg(feature = "token_stream")]
 #[cfg(doctest)]
 mod test_readme {
     macro_rules! external_doc_test {
@@ -192,12 +193,12 @@ pub enum PostProcess {
     /// No post processing after formatting (default)
     None,
 
-    /// Replace [_blank_!] and [_comment_!] markers
+    /// Replace [`_blank_!`] and [`_comment_!`] markers
     #[cfg(feature = "post_process")]
     #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
     ReplaceMarkers,
 
-    /// Replace [_blank_!] and [_comment_!] markers and  `#[doc = ""]` (with `///`)
+    /// Replace [`_blank_!`] and [`_comment_!`] markers and  `#[doc = ""]` (with `///`)
     #[cfg(feature = "post_process")]
     #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
     ReplaceMarkersAndDocBlocks,
