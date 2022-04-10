@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use flexgen::var::{CodeValue, TokenItem, TokenValue, TokenVars, Vars};
+use flexgen::var::{CodeTokenValue, CodeValue, TokenItem, TokenValue, TokenVars};
 use flexgen::{import_vars, register_fragments, CodeFragment, CodeGenError};
 use flexstr::shared_str;
 use proc_macro2::TokenStream;
@@ -19,8 +19,7 @@ impl CodeFragment for DocTest {
             println!("Fib: {}", #fib(12));
         };
 
-        let doc_test = doc_test!(test).unwrap();
-        Ok(doc_test)
+        Ok(doc_test!(test)?)
     }
 }
 
@@ -53,7 +52,9 @@ fn main() {
     let mut map = HashMap::new();
     map.insert(
         shared_str!("fib"),
-        TokenItem::Single(TokenValue::new(CodeValue::Ident(shared_str!("fibonacci")))?),
+        TokenItem::Single(TokenValue::CodeValue(
+            CodeTokenValue::new(&CodeValue::Ident(shared_str!("fibonacci"))).unwrap(),
+        )),
     );
 
     let fib = Function.generate(&map).unwrap().to_string();
