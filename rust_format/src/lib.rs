@@ -408,6 +408,7 @@ pub trait Formatter {
 ///
 /// assert_eq!(expected, actual);
 /// ```
+#[derive(Clone)]
 pub struct RustFmt {
     rust_fmt: PathBuf,
     edition: Edition,
@@ -613,7 +614,7 @@ impl Formatter for RustFmt {
 /// ```
 #[cfg(feature = "pretty_please")]
 #[cfg_attr(docsrs, doc(cfg(feature = "pretty_please")))]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct PrettyPlease {
     post_proc: PostProcess,
 }
