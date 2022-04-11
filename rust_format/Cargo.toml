@@ -1,6 +1,6 @@
 [package]
 name = "rust-format"
-version = "0.3.3"
+version = "0.3.4"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A Rust source code formatting crate with a unified interface for string, file, and TokenStream input"

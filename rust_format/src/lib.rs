@@ -72,8 +72,7 @@ const RUST_FMT_KEY: &str = "RUSTFMT";
 /// It is important to understand this is NOT actually a macro that is executed. In fact, it is just
 /// here for documentation purposes. Instead, this works as a raw set of tokens in the source code
 /// that we match against verbatim. This means it cannot be renamed on import for example, and it MUST be
-/// invoked as `_blank_!(`, then an optional Rust integer literal, and then `);`. These are matched exactly
-/// and no excess whitespace is allowed or it won't be matched.
+/// invoked as `_blank_!(`, then an optional Rust integer literal, and then `);`.
 ///
 /// Actually executing this macro has no effect and it is not meant to even be imported.
 #[cfg(feature = "post_process")]
@@ -91,8 +90,8 @@ macro_rules! _blank_ {
 /// It is important to understand this is NOT actually a macro that is executed. In fact, it is just
 /// here for documentation purposes. Instead, this works as a raw set of tokens in the source code
 /// that we match against verbatim. This means it cannot be renamed on import for example, and it MUST be
-/// invoked as `_comment_!(`, then an optional Rust `str` literal, and then `);`. These are matched exactly
-/// and no excess whitespace is allowed or it won't be matched.
+/// invoked as `_comment_!(`, then an optional Rust `str` literal (regular or raw, not byte string),
+/// and then `);`.
 ///
 /// Actually executing this macro has no effect and it is not meant to even be imported.
 #[cfg(feature = "post_process")]

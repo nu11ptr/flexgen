@@ -5,12 +5,16 @@ use std::{cmp, slice};
 
 use crate::Error;
 
-const BLANK_IDENT: &[u8] = b"lank_!(";
-const COMMENT_IDENT: &[u8] = b"omment_!(";
-const DOC_BLOCK: &[u8] = b"[doc = ";
+const BLANK_START: &[&[u8]] = &[b"lank_", b"!", b"("];
+const BLANK_END: &[&[u8]] = &[b";"];
+const COMMENT_START: &[&[u8]] = &[b"omment_", b"!", b"("];
+const COMMENT_END: &[&[u8]] = &[b")", b";"];
+const COMMENT_END2: &[&[u8]] = &[b";"];
+const DOC_BLOCK_START: &[&[u8]] = &[b"[", b"doc", b"="];
+const DOC_BLOCK_END: &[&[u8]] = &[b"]"];
 
 const EMPTY_COMMENT: &str = "//";
-const COMMENT_START: &str = "// ";
+const COMMENT: &str = "// ";
 const DOC_COMMENT: &str = "///";
 const LF_STR: &str = "\n";
 const CRLF_STR: &str = "\r\n";
@@ -33,9 +37,6 @@ const MIN_BUFF_SIZE: usize = 128;
 // probability of a false positive while low in comments and strings, is likely very close to zero anywhere else, so
 // I think this is a good compromise. Regardless, the user should be advised to not use `_comment_!(` or `_blank_!(`
 // anywhere in the source file other than where they want markers.
-//
-// It should also be noted we take some liberties with things like the doc block and assume it has been properly formatted
-// and has exactly 1 space before the `=`, etc. Same with the macro markers and the parens - no white space allowed
 
 struct CopyingCursor<'a> {
     start_idx: usize,
@@ -229,29 +230,88 @@ impl<'a> CopyingCursor<'a> {
             }
         }
 
+        // EOF
         Err(Error::BadSourceCode("Unexpected end of input".to_string()))
     }
 
     fn try_skip_string(&mut self) -> Result<Option<u8>, Error> {
-        match self.next() {
-            // Regular string
-            Some(b'"') => {
-                self.skip_string();
-                Ok(None)
+        while let Some(ch) = self.next() {
+            if Self::is_whitespace(ch) {
+                continue;
             }
-            // Raw string
-            Some(b'r') => {
-                if self.try_skip_raw_string() {
+
+            return match ch {
+                // Regular string
+                b'"' => {
+                    self.skip_string();
                     Ok(None)
+                }
+                // Raw string
+                b'r' => {
+                    if self.try_skip_raw_string() {
+                        Ok(None)
+                    } else {
+                        Err(Error::BadSourceCode("Bad raw string".to_string()))
+                    }
+                }
+                // Something else
+                ch => Ok(Some(ch)),
+            };
+        }
+
+        // EOF
+        Err(Error::BadSourceCode("Unexpected end of input".to_string()))
+    }
+
+    // TODO: Was planning to match values here (but we only recognize ASCII atm):
+    // https://github.com/rust-lang/rust/blob/38e0ae590caab982a4305da58a0a62385c2dd880/compiler/rustc_lexer/src/lib.rs#L245
+    // We could switch back to UTF8 since we have been matching valid ASCII up to this point, but atm
+    // any unicode whitespace will make it not match (not sure any code formatter preserves non-ASCII whitespace?)
+    // For now, users should use NO whitespace and let the code formatters add any, if needed. I suspect
+    // they will not add any non-ASCII whitespace on their own at min, but likely just ' ', '\n', and '\r'
+    //
+    // Code points we don't handle that we should (for future ref):
+    // Code point 0x0085 == 0xC285
+    // Code point 0x200E == 0xE2808E
+    // Code point 0x200F == 0xE2808F
+    // Code point 0x2028 == 0xE280A8
+    // Code point 0x2029 == 0xE280A9
+    #[inline]
+    fn is_whitespace(ch: u8) -> bool {
+        matches!(ch, b' ' | b'\n' | b'\r' | b'\t' | b'\x0b' | b'\x0c')
+    }
+
+    fn try_ws_matches(&mut self, slices: &[&[u8]], allow_whitespace_first: bool) -> bool {
+        let mut allow_whitespace = allow_whitespace_first;
+
+        'top: for &sl in slices {
+            // Panic safety: it is pointless for us to pass in a blank slice, don't do that
+            let first_ch = sl[0];
+
+            while let Some(ch) = self.next() {
+                // This is what we were looking for, now match the rest (if needed)
+                if ch == first_ch {
+                    // Panic safety: it is pointless for us to pass in a blank slice, don't do that
+                    let remainder = &sl[1..];
+
+                    if !remainder.is_empty() && !self.try_match(remainder) {
+                        return false;
+                    }
+                    allow_whitespace = true;
+                    continue 'top;
+                } else if allow_whitespace && Self::is_whitespace(ch) {
+                    // no op
                 } else {
-                    Err(Error::BadSourceCode("Bad raw string".to_string()))
+                    return false;
                 }
             }
-            // Something else
-            Some(ch) => Ok(Some(ch)),
-            // EOF
-            None => Err(Error::BadSourceCode("Unexpected end of input".to_string())),
+
+            // Premature EOF
+            return false;
         }
+
+        // If we can exhaust the iterator then they all must have matched
+        true
     }
 
     fn try_match(&mut self, sl: &[u8]) -> bool {
@@ -342,7 +402,7 @@ impl<'a> CopyingCursor<'a> {
                     if line.is_empty() {
                         buffer.push_str(EMPTY_COMMENT);
                     } else {
-                        buffer.push_str(COMMENT_START);
+                        buffer.push_str(COMMENT);
                         buffer.push_str(line);
                     }
 
@@ -390,16 +450,17 @@ impl<'a> CopyingCursor<'a> {
         Ok(())
     }
 
-    fn try_match_prefix(
+    fn try_match_prefixes(
         &mut self,
-        spaces: usize,
+        indent: usize,
         chars_matched: usize,
-        prefix: &[u8],
+        prefixes: &[&[u8]],
+        allow_ws_first: bool,
     ) -> Option<(usize, usize)> {
         // We already matched X chars before we got here (but didn't 'next()' after last match so minus 1)
-        let mark_start_ident = self.curr_idx - ((chars_matched + spaces) - 1);
+        let mark_start_ident = self.curr_idx - ((chars_matched + indent) - 1);
 
-        if self.try_match(prefix) {
+        if self.try_ws_matches(prefixes, allow_ws_first) {
             let mark_start_value = self.curr_idx + 1;
             Some((mark_start_ident, mark_start_value))
         } else {
@@ -411,7 +472,7 @@ impl<'a> CopyingCursor<'a> {
         &mut self,
         spaces: usize,
         chars_matched: usize,
-        suffix: &[u8],
+        suffixes: &[&[u8]],
         mark_start_ident: usize,
         mark_start_value: usize,
         f: F,
@@ -422,7 +483,7 @@ impl<'a> CopyingCursor<'a> {
         // End of value (exclusive)
         let mark_end_value = self.curr_idx + (1 - chars_matched);
 
-        if !self.try_match(suffix) {
+        if !self.try_ws_matches(suffixes, true) {
             return Err(Error::BadSourceCode(
                 "Unable to match suffix on doc block or marker.".to_string(),
             ));
@@ -449,14 +510,16 @@ impl<'a> CopyingCursor<'a> {
     }
 
     fn try_replace_blank_marker(&mut self, spaces: usize) -> Result<bool, Error> {
-        match self.try_match_prefix(spaces, 2, BLANK_IDENT) {
+        // 6 or 7 sections to match: _blank_ ! ( [int] ) ; CRLF|LF
+
+        match self.try_match_prefixes(spaces, 2, BLANK_START, false) {
             Some((ident_start, value_start)) => {
                 self.skip_blank_param()?;
 
                 self.try_replace(
                     spaces,
                     1,
-                    b";",
+                    BLANK_END,
                     ident_start,
                     value_start,
                     CopyingCursor::process_blanks,
@@ -468,14 +531,16 @@ impl<'a> CopyingCursor<'a> {
     }
 
     fn try_replace_comment_marker(&mut self, spaces: usize) -> Result<bool, Error> {
-        match self.try_match_prefix(spaces, 2, COMMENT_IDENT) {
+        // 6 or 7 sections to match: _comment_ ! ( [string] ) ; CRLF|LF
+
+        match self.try_match_prefixes(spaces, 2, COMMENT_START, false) {
             Some((ident_start, value_start)) => {
                 // Make sure it is empty or a string
                 let (matched, suffix) = match self.try_skip_string()? {
                     // String
-                    None => (0, b");" as &[u8]),
+                    None => (0, COMMENT_END),
                     // Empty
-                    Some(b')') => (1, b";" as &[u8]),
+                    Some(b')') => (1, COMMENT_END2),
                     Some(ch) => {
                         return Err(Error::BadSourceCode(format!(
                             "Expected ')' or string, but got: {}",
@@ -499,7 +564,9 @@ impl<'a> CopyingCursor<'a> {
     }
 
     fn try_replace_doc_block(&mut self, spaces: usize) -> Result<bool, Error> {
-        match self.try_match_prefix(spaces, 1, DOC_BLOCK) {
+        // 7 sections to match: # [ doc = <string> ] CRLF|LF
+
+        match self.try_match_prefixes(spaces, 1, DOC_BLOCK_START, true) {
             Some((ident_start, value_start)) => {
                 // Make sure it is a string
                 match self.try_skip_string()? {
@@ -508,7 +575,7 @@ impl<'a> CopyingCursor<'a> {
                         self.try_replace(
                             spaces,
                             0,
-                            b"]",
+                            DOC_BLOCK_END,
                             ident_start,
                             value_start,
                             CopyingCursor::process_doc_block,
@@ -672,8 +739,10 @@ fn main() {
     println!("hello \nworld");
 }
 
-_comment_!(r#"This is two
-comments"#);
+   _comment_ !
+( r#"This is two
+comments"# )
+;
 _blank!_;
 "####;
 
@@ -694,8 +763,8 @@ fn main() {
     println!("hello \nworld");
 }
 
-// This is two
-// comments
+   // This is two
+   // comments
 _blank!_;
 "####;
 
@@ -717,7 +786,10 @@ fn main() {
     println!("hello \nworld");
 }
 
-_blank_!(2);
+      _blank_
+!(
+2
+);
 _blank!_;
 "####;
 
@@ -760,7 +832,12 @@ fn main() {
     println!("hello \nworld");
 }
 
-#[doc = " this is\n\n three doc comments"]
+#    [
+doc
+ = 
+ " this is\n\n three doc comments"
+ 
+ ]
 fn test() {
 }
 _blank!_;
