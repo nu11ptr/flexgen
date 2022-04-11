@@ -6,9 +6,11 @@ use std::{fs, io};
 use flexstr::SharedStr;
 
 use crate::var::Vars;
-use crate::{CodeFragments, CodeGenError};
+use crate::{CodeFragments, CodeGenError, TokenVars};
 
 const BUF_SIZE: usize = u16::MAX as usize;
+
+const DEFAULT_FILENAME: &str = "flexgen.toml";
 
 // *** FragmentItem ***
 
@@ -23,7 +25,7 @@ pub enum FragmentItem {
 // *** Fragment Lists ***
 
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
-pub struct FragmentLists(HashMap<SharedStr, Vec<FragmentItem>>);
+struct FragmentLists(HashMap<SharedStr, Vec<FragmentItem>>);
 
 impl FragmentLists {
     pub fn build(&self) -> Self {
@@ -116,12 +118,19 @@ impl FragmentLists {
             ))
         }
     }
+
+    #[inline]
+    pub fn fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, CodeGenError> {
+        self.0
+            .get(name)
+            .ok_or_else(|| CodeGenError::FragmentListNotFound(name.clone()))
+    }
 }
 
 // *** Config ***
 
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
-pub struct Common {
+struct Common {
     #[serde(default)]
     base_path: PathBuf,
     #[serde(default)]
@@ -131,7 +140,7 @@ pub struct Common {
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
-pub struct File {
+struct File {
     path: PathBuf,
     fragment_list: SharedStr,
     #[serde(default)]
@@ -149,33 +158,27 @@ pub struct Config {
 
 impl Config {
     /// Try to load the `Config` from the given TOML reader
-    pub fn from_toml_reader(
-        r: impl io::Read,
-        code: &CodeFragments,
-    ) -> Result<Config, CodeGenError> {
+    pub fn from_toml_reader(r: impl io::Read) -> Result<Config, CodeGenError> {
         let mut reader = io::BufReader::new(r);
         let mut buffer = String::with_capacity(BUF_SIZE);
         reader.read_to_string(&mut buffer)?;
 
-        let mut config: Config = toml::from_str(&buffer)?;
-        config.build_and_validate(code)?;
-        Ok(config)
+        Ok(toml::from_str(&buffer)?)
+    }
+
+    /// Try to load the `Config` from the default TOML file (flexgen.toml)
+    pub fn from_default_toml_file() -> Result<Config, CodeGenError> {
+        let f = fs::File::open(DEFAULT_FILENAME)?;
+        Self::from_toml_reader(f)
     }
 
     /// Try to load the `Config` from the given TOML file
-    pub fn from_toml_file(
-        cfg_name: impl AsRef<Path>,
-        code: &CodeFragments,
-    ) -> Result<Config, CodeGenError> {
-        match fs::File::open(cfg_name) {
-            // If the file exists, but it can't be deserialized then report that error
-            Ok(f) => Ok(Self::from_toml_reader(f, code)?),
-            // Report any other I/O errors
-            Err(err) => Err(err.into()),
-        }
+    pub fn from_toml_file(cfg_name: impl AsRef<Path>) -> Result<Config, CodeGenError> {
+        let f = fs::File::open(cfg_name)?;
+        Self::from_toml_reader(f)
     }
 
-    fn build_and_validate(&mut self, code: &CodeFragments) -> Result<(), CodeGenError> {
+    pub(crate) fn build_and_validate(&mut self, code: &CodeFragments) -> Result<(), CodeGenError> {
         // Build and validate fragment lists against code fragments and files
         self.fragment_lists = self.fragment_lists.build();
 
@@ -191,6 +194,69 @@ impl Config {
     pub fn file_names(&self) -> Vec<&SharedStr> {
         self.files.keys().collect()
     }
+
+    #[inline]
+    fn file(&self, name: &SharedStr) -> Result<&File, CodeGenError> {
+        self.files
+            .get(name)
+            .ok_or_else(|| CodeGenError::FileNotFound(name.clone()))
+    }
+
+    pub fn file_path(&self, name: &SharedStr) -> Result<PathBuf, CodeGenError> {
+        let file = self.file(name)?;
+        let base_path = self.common.base_path.as_os_str();
+
+        let mut path = PathBuf::with_capacity(base_path.len() + file.path.as_os_str().len());
+        path.push(base_path);
+        path.push(&file.path);
+        Ok(path)
+    }
+
+    #[inline]
+    fn convert_vars(vars: &Vars) -> Result<TokenVars, CodeGenError> {
+        vars.iter()
+            .map(|(key, value)| match value.to_token_item() {
+                Ok(value) => Ok((key.clone(), value)),
+                Err(err) => Err(err),
+            })
+            .collect()
+    }
+
+    #[inline]
+    fn common_vars(&self) -> Result<TokenVars, CodeGenError> {
+        Self::convert_vars(&self.common.vars)
+    }
+
+    #[inline]
+    fn file_vars(&self, name: &SharedStr) -> Result<TokenVars, CodeGenError> {
+        Self::convert_vars(&self.file(name)?.vars)
+    }
+
+    #[inline]
+    pub fn vars(&self, name: &SharedStr) -> Result<TokenVars, CodeGenError> {
+        let mut vars = self.common_vars()?;
+        vars.extend(self.file_vars(name)?);
+        Ok(vars)
+    }
+
+    #[inline]
+    pub fn fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, CodeGenError> {
+        self.fragment_lists.fragment_list(name)
+    }
+
+    #[inline]
+    pub fn file_fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, CodeGenError> {
+        let name = &self.file(name)?.fragment_list;
+        self.fragment_list(name)
+    }
+
+    #[inline]
+    pub fn file_fragment_exceptions(
+        &self,
+        name: &SharedStr,
+    ) -> Result<&Vec<SharedStr>, CodeGenError> {
+        Ok(&self.file(name)?.fragment_list_exceptions)
+    }
 }
 
 #[cfg(test)]
@@ -201,12 +267,9 @@ mod tests {
 
     use flexstr::{shared_str, SharedStr};
     use pretty_assertions::assert_eq;
-    use proc_macro2::TokenStream;
-    use quote::quote;
 
     use crate::config::{Common, Config, File, FragmentItem, FragmentLists};
     use crate::var::{CodeValue, VarItem, VarValue};
-    use crate::{register_fragments, CodeFragment, CodeGenError, TokenVars};
 
     const CONFIG: &str = r#"
         [common]
@@ -232,30 +295,6 @@ mod tests {
         [files.str.vars]
         str_type = "str"
     "#;
-
-    struct ImplCoreRef;
-
-    impl CodeFragment for ImplCoreRef {
-        fn generate(&self, _vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
-            Ok(quote! {})
-        }
-    }
-
-    struct Empty;
-
-    impl CodeFragment for Empty {
-        fn generate(&self, _vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
-            Ok(quote! {})
-        }
-    }
-
-    struct FromRef;
-
-    impl CodeFragment for FromRef {
-        fn generate(&self, _vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
-            Ok(quote! {})
-        }
-    }
 
     fn common() -> Common {
         let mut vars = HashMap::new();
@@ -326,8 +365,7 @@ mod tests {
 
     #[test]
     fn from_reader() {
-        let code = register_fragments!(ImplCoreRef, Empty, FromRef);
-        let actual = Config::from_toml_reader(CONFIG.as_bytes(), &code).unwrap();
+        let actual = Config::from_toml_reader(CONFIG.as_bytes()).unwrap();
         let expected = Config {
             common: common(),
             fragment_lists: fragment_lists(),

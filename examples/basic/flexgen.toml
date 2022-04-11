@@ -1,0 +1,9 @@
+[fragment_lists]
+fib = [ "function" ]
+
+[files.fib]
+path = "fib.rs"
+fragment_list = "fib"
+
+[files.fib.vars]
+fib = "$ident$fibonacci"

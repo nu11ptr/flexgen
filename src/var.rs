@@ -161,7 +161,7 @@ pub enum VarItem {
 
 impl VarItem {
     #[inline]
-    fn to_token_item(&self) -> Result<TokenItem, CodeGenError> {
+    pub fn to_token_item(&self) -> Result<TokenItem, CodeGenError> {
         match self {
             VarItem::List(l) => {
                 let items: Vec<_> = l

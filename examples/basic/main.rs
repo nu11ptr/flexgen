@@ -1,8 +1,6 @@
-use std::collections::HashMap;
-
-use flexgen::var::{CodeTokenValue, CodeValue, TokenItem, TokenValue, TokenVars};
-use flexgen::{import_vars, register_fragments, CodeFragment, CodeGenError};
-use flexstr::shared_str;
+use flexgen::config::Config;
+use flexgen::var::TokenVars;
+use flexgen::{import_vars, register_fragments, CodeFragment, CodeGenError, CodeGenerator};
 use proc_macro2::TokenStream;
 use quote::quote;
 use quote_doctest::doc_test;
@@ -46,17 +44,9 @@ impl CodeFragment for Function {
     }
 }
 
-fn main() {
-    let _fragments = register_fragments!(Function);
-
-    let mut map = HashMap::new();
-    map.insert(
-        shared_str!("fib"),
-        TokenItem::Single(TokenValue::CodeValue(
-            CodeTokenValue::new(&CodeValue::Ident(shared_str!("fibonacci"))).unwrap(),
-        )),
-    );
-
-    let fib = Function.generate(&map).unwrap().to_string();
-    println!("{}", fib);
+fn main() -> Result<(), CodeGenError> {
+    let fragments = register_fragments!(Function);
+    let config = Config::from_default_toml_file()?;
+    let executor = CodeGenerator::new(fragments, config)?;
+    executor.generate_files()
 }

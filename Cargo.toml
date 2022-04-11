@@ -15,11 +15,11 @@ heck = "0.4"
 proc-macro2 = "1.0"
 quote = "1.0"
 rayon = "1.5"
-rust-format = { version = "0.3.2" }
+rust-format = { version = "0.3.2", features = ["post_process", "pretty_please", "token_stream"] }
 serde = { version = "1", features = ["derive"] }
 syn = "1.0"
 thiserror = "1.0"
-toml = "0.5"
+toml = { version = "0.5", features = ["preserve_order"] }
 
 [dev-dependencies]
 pretty_assertions = "1"
