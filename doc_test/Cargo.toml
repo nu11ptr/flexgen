@@ -1,6 +1,6 @@
 [package]
 name = "quote-doctest"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A simple doctest generator for quote"
@@ -22,7 +22,7 @@ pretty_please = ["rust-format/pretty_please"]
 [dependencies]
 proc-macro2 = "1.0"
 quote = "1.0"
-rust-format = { version = "0.3.2", features = ["post_process", "token_stream"] }
+rust-format = { version = "0.3.4", features = ["post_process", "token_stream"] }
 
 [dev-dependencies]
 pretty_assertions = "1.2"
