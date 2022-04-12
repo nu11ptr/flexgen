@@ -35,7 +35,7 @@ impl CodeFragment for Function {
             #[inline]
             fn #fib(n: u64) -> u64 {
                 match n {
-                    0 => 1,
+                    0 => 0,
                     1 => 1,
                     n => #fib(n - 1) + #fib(n - 2),
                 }
@@ -44,8 +44,25 @@ impl CodeFragment for Function {
     }
 }
 
+struct Main;
+
+impl CodeFragment for Main {
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
+        import_vars!(vars => fib);
+
+        Ok(quote! {
+            /// This is the main function
+            fn main()  {
+                _comment_!("\nCalculate fibonacci for the number 42\n\n");
+                let answer = #fib(42);
+                println!("{answer}");
+            }
+        })
+    }
+}
+
 fn main() -> Result<(), CodeGenError> {
-    let fragments = register_fragments!(Function);
+    let fragments = register_fragments!(Function, Main);
     let config = Config::from_default_toml_file()?;
     let executor = CodeGenerator::new(fragments, config)?;
     executor.generate_files()

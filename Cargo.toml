@@ -9,6 +9,9 @@ documentation = "https://docs.rs/flexgen"
 readme = "README.md"
 edition = "2021"
 
+[workspace]
+members = ["doc_test", "rust_format"]
+
 [dependencies]
 flexstr = { version = "0.9", features = ["serde"] }
 heck = "0.4"
@@ -19,11 +22,8 @@ rust-format = { version = "0.3.4", features = ["post_process", "pretty_please", 
 serde = { version = "1", features = ["derive"] }
 syn = "1.0"
 thiserror = "1.0"
-toml = { version = "0.5", features = ["preserve_order"] }
+toml = "0.5"
 
 [dev-dependencies]
 pretty_assertions = "1"
 quote-doctest = "0.3.2"
-
-[workspace]
-members = ["doc_test", "rust_format"]

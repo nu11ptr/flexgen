@@ -101,15 +101,18 @@ impl<'exec> FileGenerator<'exec> {
         })
     }
 
-    fn assemble_source(results: Vec<TokenStream>) -> Result<String, CodeGenError> {
+    fn assemble_source(&self, results: Vec<TokenStream>) -> Result<String, CodeGenError> {
         let tokens = quote! { #( #results )* };
 
         let config = rust_format::Config::new_str().post_proc(PostProcess::ReplaceMarkers);
         let formatter = PrettyPlease::from_config(config);
+        let source = formatter.format_tokens(tokens)?;
 
-        // TODO: Optional secondary format with `rustfmt`
-
-        Ok(formatter.format_tokens(tokens)?)
+        // Either return after PrettyPlease format or do one last final RustFmt run
+        Ok(match self.config.build_rust_fmt() {
+            Some(rust_fmt) => rust_fmt.format_str(source)?,
+            None => source,
+        })
     }
 
     fn build_source(
@@ -158,14 +161,14 @@ impl<'exec> FileGenerator<'exec> {
         let mut results = Vec::with_capacity(self.fragments.len() * 2);
         // Would be nice to make this a constant, but _comment_! marker needs a literal
         let comment = quote! {
-            _comment_!("WARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).");
-            _comment_!("Any manual modifications to this file will be overwritten the next time this file is generated.");
+            _comment_!("\nWARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).");
+            _comment_!("Any manual modifications to this file will be overwritten the next time this file is generated.\n\n");
             _blank_!();
         };
         results.push(comment);
 
         self.build_source(fragments, exceptions, &mut results)?;
-        let source = Self::assemble_source(results)?;
+        let source = self.assemble_source(results)?;
 
         Ok((self.name.clone(), source))
     }

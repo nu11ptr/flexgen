@@ -1,5 +1,5 @@
 [fragment_lists]
-fib = [ "function" ]
+fib = [ "function", "main" ]
 
 [files.fib]
 path = "fib.rs"

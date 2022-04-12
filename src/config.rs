@@ -130,13 +130,50 @@ impl FragmentLists {
 // *** Config ***
 
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
-struct Common {
+struct General {
     #[serde(default)]
     base_path: PathBuf,
     #[serde(default)]
-    rustfmt_path: PathBuf,
+    rust_fmt: RustFmt,
     #[serde(default)]
     vars: Vars,
+}
+
+impl General {
+    #[inline]
+    fn build_rust_fmt(&self) -> Option<rust_format::RustFmt> {
+        self.rust_fmt.build_rust_fmt()
+    }
+}
+
+#[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
+struct RustFmt {
+    #[serde(default)]
+    omit_final_format: bool,
+    #[serde(default)]
+    path: Option<PathBuf>,
+    #[serde(default)]
+    options: HashMap<SharedStr, SharedStr>,
+}
+
+impl RustFmt {
+    fn build_rust_fmt(&self) -> Option<rust_format::RustFmt> {
+        if !self.omit_final_format {
+            let mut config = if !self.options.is_empty() {
+                let map = self.options.iter().map(|(k, v)| (&**k, &**v)).collect();
+                rust_format::Config::from_hash_map(map)
+            } else {
+                rust_format::Config::new()
+            };
+            if let Some(path) = &self.path {
+                config = config.rust_fmt_path(path.clone())
+            }
+
+            Some(rust_format::RustFmt::from_config(config))
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
@@ -151,7 +188,7 @@ struct File {
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default)]
-    common: Common,
+    general: General,
     fragment_lists: FragmentLists,
     files: HashMap<SharedStr, File>,
 }
@@ -204,7 +241,7 @@ impl Config {
 
     pub fn file_path(&self, name: &SharedStr) -> Result<PathBuf, CodeGenError> {
         let file = self.file(name)?;
-        let base_path = self.common.base_path.as_os_str();
+        let base_path = self.general.base_path.as_os_str();
 
         let mut path = PathBuf::with_capacity(base_path.len() + file.path.as_os_str().len());
         path.push(base_path);
@@ -223,8 +260,8 @@ impl Config {
     }
 
     #[inline]
-    fn common_vars(&self) -> Result<TokenVars, CodeGenError> {
-        Self::convert_vars(&self.common.vars)
+    fn general_vars(&self) -> Result<TokenVars, CodeGenError> {
+        Self::convert_vars(&self.general.vars)
     }
 
     #[inline]
@@ -234,7 +271,7 @@ impl Config {
 
     #[inline]
     pub fn vars(&self, name: &SharedStr) -> Result<TokenVars, CodeGenError> {
-        let mut vars = self.common_vars()?;
+        let mut vars = self.general_vars()?;
         vars.extend(self.file_vars(name)?);
         Ok(vars)
     }
@@ -257,6 +294,11 @@ impl Config {
     ) -> Result<&Vec<SharedStr>, CodeGenError> {
         Ok(&self.file(name)?.fragment_list_exceptions)
     }
+
+    #[inline]
+    pub fn build_rust_fmt(&self) -> Option<rust_format::RustFmt> {
+        self.general.build_rust_fmt()
+    }
 }
 
 #[cfg(test)]
@@ -268,15 +310,17 @@ mod tests {
     use flexstr::{shared_str, SharedStr};
     use pretty_assertions::assert_eq;
 
-    use crate::config::{Common, Config, File, FragmentItem, FragmentLists};
+    use crate::config::{Config, File, FragmentItem, FragmentLists, General, RustFmt};
     use crate::var::{CodeValue, VarItem, VarValue};
 
     const CONFIG: &str = r#"
-        [common]
+        [general]
         base_path = "src/"
-        rustfmt_path = "rustfmt"
         
-        [common.vars]
+        [general.rust_fmt]
+        path = "rustfmt"
+        
+        [general.vars]
         product = "FlexStr"
         generate = true
         count = 5
@@ -296,7 +340,7 @@ mod tests {
         str_type = "str"
     "#;
 
-    fn common() -> Common {
+    fn general() -> General {
         let mut vars = HashMap::new();
 
         let product = VarValue::String(shared_str!("FlexStr"));
@@ -316,9 +360,15 @@ mod tests {
             VarItem::List(vec![product, generate, count, suffix]),
         );
 
-        Common {
+        let rust_fmt = RustFmt {
+            omit_final_format: false,
+            path: Some("rustfmt".into()),
+            options: Default::default(),
+        };
+
+        General {
             base_path: PathBuf::from("src/"),
-            rustfmt_path: PathBuf::from("rustfmt"),
+            rust_fmt,
             vars,
         }
     }
@@ -330,7 +380,7 @@ mod tests {
         lists.insert(
             shared_str!("impl"),
             vec![
-                FragmentListRef(shared_str!("impl_struct")),
+                Fragment(shared_str!("impl_struct")),
                 Fragment(shared_str!("impl_core_ref")),
             ],
         );
@@ -367,7 +417,7 @@ mod tests {
     fn from_reader() {
         let actual = Config::from_toml_reader(CONFIG.as_bytes()).unwrap();
         let expected = Config {
-            common: common(),
+            general: general(),
             fragment_lists: fragment_lists(),
             files: files(),
         };
