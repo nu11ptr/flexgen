@@ -9,6 +9,7 @@ use quote::ToTokens;
 use crate::CodeGenError;
 
 const IDENT: &str = "$ident$";
+const INT_LIT: &str = "$int_lit$";
 
 /// A hashmap of variables for interpolation into [CodeFragments]
 pub type Vars = HashMap<SharedStr, VarItem>;
@@ -74,6 +75,7 @@ macro_rules! import_lists {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodeValue {
     Ident(SharedStr),
+    IntLit(SharedStr),
 }
 
 impl FromStr for CodeValue {
@@ -83,6 +85,8 @@ impl FromStr for CodeValue {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if matches!(s.find(IDENT), Some(idx) if idx == 0) {
             Ok(CodeValue::Ident(s[IDENT.len()..].to_shared_str()))
+        } else if matches!(s.find(INT_LIT), Some(idx) if idx == 0) {
+            Ok(CodeValue::IntLit(s[INT_LIT.len()..].to_shared_str()))
         } else {
             Err(CodeGenError::NotCodeItem(s.to_shared_str()))
         }
@@ -130,6 +134,7 @@ impl<'de> serde::de::Deserialize<'de> for CodeValue {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodeTokenValue {
     Ident(syn::Ident),
+    IntLit(syn::LitInt),
 }
 
 impl CodeTokenValue {
@@ -137,6 +142,7 @@ impl CodeTokenValue {
     pub fn new(item: &CodeValue) -> Result<Self, CodeGenError> {
         match item {
             CodeValue::Ident(i) => Ok(CodeTokenValue::Ident(syn::parse_str::<syn::Ident>(i)?)),
+            CodeValue::IntLit(i) => Ok(CodeTokenValue::IntLit(syn::parse_str::<syn::LitInt>(i)?)),
         }
     }
 }
@@ -146,6 +152,7 @@ impl ToTokens for CodeTokenValue {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             CodeTokenValue::Ident(ident) => ident.to_tokens(tokens),
+            CodeTokenValue::IntLit(lit) => lit.to_tokens(tokens),
         }
     }
 }

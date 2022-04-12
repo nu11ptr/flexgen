@@ -20,7 +20,7 @@ quote = "1.0"
 rayon = "1.5"
 rust-format = { version = "0.3.4", features = ["post_process", "pretty_please", "token_stream"] }
 serde = { version = "1", features = ["derive"] }
-syn = "1.0"
+syn = { version = "1.0", default-features = false, features = ["clone-impls", "extra-traits", "parsing", "printing"] }
 thiserror = "1.0"
 toml = "0.5"
 

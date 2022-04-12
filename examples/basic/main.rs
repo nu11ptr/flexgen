@@ -9,11 +9,11 @@ struct DocTest;
 
 impl CodeFragment for DocTest {
     fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
-        import_vars!(vars => fib);
+        import_vars!(vars => fib, one);
 
         let test = quote! {
             assert_eq!(#fib(10), 55);
-            assert_eq!(#fib(1), 1);
+            assert_eq!(#fib(#one), #one);
             println!("Fib: {}", #fib(12));
         };
 
@@ -25,7 +25,7 @@ struct Function;
 
 impl CodeFragment for Function {
     fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
-        import_vars!(vars => fib);
+        import_vars!(vars => fib, one);
 
         let doc_test = DocTest.generate(vars)?;
 
@@ -36,7 +36,7 @@ impl CodeFragment for Function {
             fn #fib(n: u64) -> u64 {
                 match n {
                     0 => 0,
-                    1 => 1,
+                    #one => #one,
                     n => #fib(n - 1) + #fib(n - 2),
                 }
             }

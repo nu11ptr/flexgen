@@ -7,3 +7,4 @@ fragment_list = "fib"
 
 [files.fib.vars]
 fib = "$ident$fibonacci"
+one = "$int_lit$1"
