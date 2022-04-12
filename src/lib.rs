@@ -158,10 +158,8 @@ impl<'exec> FileGenerator<'exec> {
         let mut results = Vec::with_capacity(self.fragments.len() * 2);
         // Would be nice to make this a constant, but _comment_! marker needs a literal
         let comment = quote! {
-            _comment_!("WARNING: This file has been auto-generated using flexgen");
-            _comment_!("https://github.com/nu11ptr/flexgen).");
-            _comment_!("Any manual modifications to this file will be overwritten ");
-            _comment_!("the next time this file is generated.");
+            _comment_!("WARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).");
+            _comment_!("Any manual modifications to this file will be overwritten the next time this file is generated.");
             _blank_!();
         };
         results.push(comment);

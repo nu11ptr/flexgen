@@ -1,7 +1,5 @@
-// WARNING: This file has been auto-generated using flexgen
-// https://github.com/nu11ptr/flexgen).
-// Any manual modifications to this file will be overwritten 
-// the next time this file is generated.
+// WARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).
+// Any manual modifications to this file will be overwritten the next time this file is generated.
 
 /// This will run a compare between fib inputs and the outputs
 /// ```
