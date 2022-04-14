@@ -1,0 +1,7 @@
+[package]
+name = "use-builder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+syn = { version = "1.0", default-features = false, features = [ "clone-impls", "extra-traits", "full", "parsing" ] }
