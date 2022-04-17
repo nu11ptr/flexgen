@@ -11,6 +11,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
 use rust_format::{Formatter, PostProcess, PrettyPlease};
+use use_builder::{UseBuilder, UseItems};
 
 use crate::config::{Config, FragmentItem};
 use crate::var::TokenVars;
@@ -73,6 +74,8 @@ pub enum CodeGenError {
     IOError(#[from] io::Error),
     #[error(transparent)]
     TOMLError(#[from] toml::de::Error),
+    #[error(transparent)]
+    UseBuilderError(#[from] use_builder::Error),
 }
 
 // *** Execute ***
@@ -101,8 +104,33 @@ impl<'exec> FileGenerator<'exec> {
         })
     }
 
-    fn assemble_source(&self, results: Vec<TokenStream>) -> Result<String, CodeGenError> {
-        let tokens = quote! { #( #results )* };
+    fn assemble_source(
+        &self,
+        results: Vec<TokenStream>,
+        uses: Vec<UseItems>,
+    ) -> Result<String, CodeGenError> {
+        // Would be nice to make this a constant, but _comment_! marker needs a literal
+        let comment = quote! {
+            _comment_!("\nWARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).");
+            _comment_!("Any manual modifications to this file will be overwritten the next time this file is generated.\n\n");
+        };
+
+        let builder = UseBuilder::from_uses(uses);
+        let (std_uses, ext_uses, crate_uses) = builder.into_items_sections()?;
+
+        let tokens = quote! {
+            #comment
+            _blank_!();
+
+            #( #std_uses )*
+            _blank_!();
+            #( #ext_uses )*
+            _blank_!();
+            #( #crate_uses )*
+            _blank_!();
+
+            #( #results )*
+        };
 
         let config = rust_format::Config::new_str().post_proc(PostProcess::ReplaceMarkers);
         let formatter = PrettyPlease::from_config(config);
@@ -120,6 +148,7 @@ impl<'exec> FileGenerator<'exec> {
         fragments: &[FragmentItem],
         exceptions: &[SharedStr],
         results: &mut Vec<TokenStream>,
+        use_trees: &mut Vec<UseItems>,
     ) -> Result<(), CodeGenError> {
         for (idx, fragment) in fragments.iter().enumerate() {
             match fragment {
@@ -129,7 +158,7 @@ impl<'exec> FileGenerator<'exec> {
                     }
 
                     let fragments = self.config.fragment_list(name)?;
-                    return self.build_source(fragments, exceptions, results);
+                    return self.build_source(fragments, exceptions, results, use_trees);
                 }
                 FragmentItem::Fragment(name) => {
                     if exceptions.contains(name) {
@@ -140,6 +169,11 @@ impl<'exec> FileGenerator<'exec> {
                     let fragment = self.fragments[name];
                     let tokens = fragment.generate(&self.vars)?;
                     results.push(tokens);
+
+                    // Store the use tree, if we had one
+                    if let Some(tokens) = fragment.uses() {
+                        use_trees.push(syn::parse2(tokens)?)
+                    }
 
                     // Push a blank line on all but the last fragment in the list
                     if idx < fragments.len() - 1 {
@@ -159,16 +193,11 @@ impl<'exec> FileGenerator<'exec> {
 
         // TODO: What capacity? (we could have nested lists, etc.)
         let mut results = Vec::with_capacity(self.fragments.len() * 2);
-        // Would be nice to make this a constant, but _comment_! marker needs a literal
-        let comment = quote! {
-            _comment_!("\nWARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).");
-            _comment_!("Any manual modifications to this file will be overwritten the next time this file is generated.\n\n");
-            _blank_!();
-        };
-        results.push(comment);
 
-        self.build_source(fragments, exceptions, &mut results)?;
-        let source = self.assemble_source(results)?;
+        // TODO: What capacity?
+        let mut uses = Vec::new();
+        self.build_source(fragments, exceptions, &mut results, &mut uses)?;
+        let source = self.assemble_source(results, uses)?;
 
         Ok((self.name.clone(), source))
     }
@@ -250,5 +279,10 @@ pub type CodeFragments = HashMap<SharedStr, &'static (dyn CodeFragment + Send + 
 
 /// A single code fragment - the smallest unit of work
 pub trait CodeFragment {
+    #[inline]
+    fn uses(&self) -> Option<TokenStream> {
+        None
+    }
+
     fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError>;
 }

@@ -1,16 +1,18 @@
 [package]
 name = "flexgen"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A flexible, yet simple quote-based code generator for Rust"
 repository = "https://github.com/nu11ptr/flexgen"
 documentation = "https://docs.rs/flexgen"
+keywords = ["syn", "quote", "doctest", "generate"]
+categories = ["development-tools"]
 readme = "README.md"
 edition = "2021"
 
 [workspace]
-members = ["doc_test", "rust_format"]
+members = ["doc_test", "rust_format", "use_builder"]
 
 [dependencies]
 flexstr = { version = "0.9", features = ["serde"] }
@@ -20,9 +22,10 @@ quote = "1.0"
 rayon = "1.5"
 rust-format = { version = "0.3.4", features = ["post_process", "pretty_please", "token_stream"] }
 serde = { version = "1", features = ["derive"] }
-syn = { version = "1.0", default-features = false, features = ["clone-impls", "extra-traits", "parsing", "printing"] }
+syn = { version = "1.0", default-features = false, features = ["clone-impls", "extra-traits", "full", "parsing", "printing"] }
 thiserror = "1.0"
 toml = "0.5"
+use-builder = "0.1"
 
 [dev-dependencies]
 pretty_assertions = "1"
