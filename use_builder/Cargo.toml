@@ -1,6 +1,14 @@
 [package]
 name = "use-builder"
 version = "0.1.0"
+authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
+license = "MIT OR Apache-2.0"
+description = "A crate to build source code use sections by combining multiple (possibly duplicate) use section inputs"
+repository = "https://github.com/nu11ptr/flexgen/tree/master/use_builder"
+documentation = "https://docs.rs/use-builder"
+keywords = ["quote", "syn", "use"]
+categories = ["development-tools", "value-formatting"]
+readme = "README.md"
 edition = "2021"
 
 [dependencies]

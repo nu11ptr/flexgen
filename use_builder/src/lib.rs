@@ -1,4 +1,5 @@
-//! A simple crate to build source code use sections by combining multiple use section inputs
+//! A crate to build source code use sections by combining multiple (possibly duplicate) use section inputs
+//!
 //! ```rust
 //! use assert_unordered::assert_eq_unordered;
 //! use quote::quote;
@@ -50,6 +51,19 @@
 //! ```
 
 #![warn(missing_docs)]
+
+// Trick to test README samples (from: https://github.com/rust-lang/cargo/issues/383#issuecomment-720873790)
+#[cfg(doctest)]
+mod test_readme {
+    macro_rules! external_doc_test {
+        ($x:expr) => {
+            #[doc = $x]
+            extern "C" {}
+        };
+    }
+
+    external_doc_test!(include_str!("../README.md"));
+}
 
 use quote::__private::TokenStream;
 use quote::{ToTokens, TokenStreamExt};
