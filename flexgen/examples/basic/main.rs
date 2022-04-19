@@ -46,7 +46,7 @@ impl CodeFragment for Function {
 struct Main;
 
 impl CodeFragment for Main {
-    fn uses(&self) -> Option<TokenStream> {
+    fn uses(&self, _vars: &TokenVars) -> Option<TokenStream> {
         Some(quote! {
             use std::error::{Error as StdError};
             use std::io::stdin;

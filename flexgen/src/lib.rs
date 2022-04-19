@@ -171,7 +171,7 @@ impl<'exec> FileGenerator<'exec> {
                     results.push(tokens);
 
                     // Store the use tree, if we had one
-                    if let Some(tokens) = fragment.uses() {
+                    if let Some(tokens) = fragment.uses(&self.vars) {
                         use_trees.push(syn::parse2(tokens)?)
                     }
 
@@ -280,7 +280,7 @@ pub type CodeFragments = HashMap<SharedStr, &'static (dyn CodeFragment + Send + 
 /// A single code fragment - the smallest unit of work
 pub trait CodeFragment {
     #[inline]
-    fn uses(&self) -> Option<TokenStream> {
+    fn uses(&self, _vars: &TokenVars) -> Option<TokenStream> {
         None
     }
 
