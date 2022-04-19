@@ -1,6 +1,6 @@
 [package]
 name = "flexgen"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Scott Meeuwsen <smeeuwsen@gmail.com>"]
 license = "MIT OR Apache-2.0"
 description = "A flexible, yet simple quote-based code generator for creating beautiful Rust code"
@@ -12,7 +12,7 @@ readme = "../README.md"
 edition = "2021"
 
 [dependencies]
-flexstr = { version = "0.9", features = ["serde"] }
+flexstr = { version = "0.9.2", features = ["serde"] }
 heck = "0.4"
 proc-macro2 = "1.0"
 quote = "1.0"

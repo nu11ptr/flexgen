@@ -147,6 +147,16 @@ impl CodeTokenValue {
     }
 }
 
+impl fmt::Display for CodeTokenValue {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CodeTokenValue::Ident(i) => <syn::Ident as fmt::Display>::fmt(i, f),
+            CodeTokenValue::IntLit(i) => <syn::LitInt as fmt::Display>::fmt(i, f),
+        }
+    }
+}
+
 impl ToTokens for CodeTokenValue {
     #[inline]
     fn to_tokens(&self, tokens: &mut TokenStream) {
@@ -221,6 +231,18 @@ pub enum TokenValue {
     Bool(bool),
     CodeValue(CodeTokenValue),
     String(SharedStr),
+}
+
+impl fmt::Display for TokenValue {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TokenValue::Number(n) => <i64 as fmt::Display>::fmt(n, f),
+            TokenValue::Bool(b) => <bool as fmt::Display>::fmt(b, f),
+            TokenValue::CodeValue(c) => <CodeTokenValue as fmt::Display>::fmt(c, f),
+            TokenValue::String(s) => <SharedStr as fmt::Display>::fmt(s, f),
+        }
+    }
 }
 
 impl ToTokens for TokenValue {
