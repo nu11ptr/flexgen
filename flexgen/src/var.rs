@@ -177,7 +177,12 @@ impl fmt::Display for CodeTokenValue {
         match self {
             CodeTokenValue::Ident(i) => <syn::Ident as fmt::Display>::fmt(i, f),
             CodeTokenValue::IntLit(i) => <syn::LitInt as fmt::Display>::fmt(i, f),
-            CodeTokenValue::Type(t) => <syn::Type as fmt::Debug>::fmt(t, f),
+            CodeTokenValue::Type(t) => {
+                // Doesn't implement Display, so we get creative - this might not always produce
+                // workable results for types made up of multiple tokens, however
+                let tokens = t.to_token_stream();
+                <TokenStream as fmt::Display>::fmt(&tokens, f)
+            }
         }
     }
 }
