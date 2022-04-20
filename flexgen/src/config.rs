@@ -6,7 +6,7 @@ use std::{fs, io};
 use flexstr::SharedStr;
 
 use crate::var::Vars;
-use crate::{CodeFragments, CodeGenError, TokenVars};
+use crate::{CodeFragments, Error, TokenVars};
 
 const BUF_SIZE: usize = u16::MAX as usize;
 
@@ -14,11 +14,14 @@ const DEFAULT_FILENAME: &str = "flexgen.toml";
 
 // *** FragmentItem ***
 
+/// An enum that is either a reference to a code fragment or a fragment list
 #[derive(Clone, Debug, serde::Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum FragmentItem {
     // Must be first so Serde uses this one always
+    /// A single code fragment
     Fragment(SharedStr),
+    /// A reference to a list of code fragments
     FragmentListRef(SharedStr),
 }
 
@@ -53,7 +56,7 @@ impl FragmentLists {
         Self(lists)
     }
 
-    pub fn validate_code_fragments(&self, code: &CodeFragments) -> Result<(), CodeGenError> {
+    pub fn validate_code_fragments(&self, code: &CodeFragments) -> Result<(), Error> {
         let mut missing = Vec::new();
 
         // Loop over each fragment list searching for each item in the code fragments
@@ -73,14 +76,14 @@ impl FragmentLists {
         if missing.is_empty() {
             Ok(())
         } else {
-            Err(CodeGenError::MissingFragments(missing))
+            Err(Error::MissingFragments(missing))
         }
     }
 
-    pub fn validate_file(&self, name: &SharedStr, f: &File) -> Result<(), CodeGenError> {
+    pub fn validate_file(&self, name: &SharedStr, f: &File) -> Result<(), Error> {
         // Ensure the file's fragment list exists
         if !self.0.contains_key(&f.fragment_list) {
-            return Err(CodeGenError::MissingFragmentList(
+            return Err(Error::MissingFragmentList(
                 f.fragment_list.clone(),
                 name.clone(),
             ));
@@ -112,18 +115,15 @@ impl FragmentLists {
         if missing.is_empty() {
             Ok(())
         } else {
-            Err(CodeGenError::MissingFragmentListExceptions(
-                missing,
-                name.clone(),
-            ))
+            Err(Error::MissingFragmentListExceptions(missing, name.clone()))
         }
     }
 
     #[inline]
-    pub fn fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, CodeGenError> {
+    pub fn fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, Error> {
         self.0
             .get(name)
-            .ok_or_else(|| CodeGenError::FragmentListNotFound(name.clone()))
+            .ok_or_else(|| Error::FragmentListNotFound(name.clone()))
     }
 }
 
@@ -185,6 +185,7 @@ struct File {
     vars: Vars,
 }
 
+/// The `flexgen` configuration
 #[derive(Clone, Debug, Default, serde::Deserialize, PartialEq)]
 pub struct Config {
     #[serde(default)]
@@ -195,7 +196,7 @@ pub struct Config {
 
 impl Config {
     /// Try to load the `Config` from the given TOML reader
-    pub fn from_toml_reader(r: impl io::Read) -> Result<Config, CodeGenError> {
+    pub fn from_toml_reader(r: impl io::Read) -> Result<Config, Error> {
         let mut reader = io::BufReader::new(r);
         let mut buffer = String::with_capacity(BUF_SIZE);
         reader.read_to_string(&mut buffer)?;
@@ -204,18 +205,18 @@ impl Config {
     }
 
     /// Try to load the `Config` from the default TOML file (flexgen.toml)
-    pub fn from_default_toml_file() -> Result<Config, CodeGenError> {
+    pub fn from_default_toml_file() -> Result<Config, Error> {
         let f = fs::File::open(DEFAULT_FILENAME)?;
         Self::from_toml_reader(f)
     }
 
     /// Try to load the `Config` from the given TOML file
-    pub fn from_toml_file(cfg_name: impl AsRef<Path>) -> Result<Config, CodeGenError> {
+    pub fn from_toml_file(cfg_name: impl AsRef<Path>) -> Result<Config, Error> {
         let f = fs::File::open(cfg_name)?;
         Self::from_toml_reader(f)
     }
 
-    pub(crate) fn build_and_validate(&mut self, code: &CodeFragments) -> Result<(), CodeGenError> {
+    pub(crate) fn build_and_validate(&mut self, code: &CodeFragments) -> Result<(), Error> {
         // Build and validate fragment lists against code fragments and files
         self.fragment_lists = self.fragment_lists.build();
 
@@ -227,19 +228,22 @@ impl Config {
         Ok(())
     }
 
+    /// Return all the files names specified in the config
     #[inline]
     pub fn file_names(&self) -> Vec<&SharedStr> {
         self.files.keys().collect()
     }
 
+    /// Return the specified file configuration
     #[inline]
-    fn file(&self, name: &SharedStr) -> Result<&File, CodeGenError> {
+    fn file(&self, name: &SharedStr) -> Result<&File, Error> {
         self.files
             .get(name)
-            .ok_or_else(|| CodeGenError::FileNotFound(name.clone()))
+            .ok_or_else(|| Error::FileNotFound(name.clone()))
     }
 
-    pub fn file_path(&self, name: &SharedStr) -> Result<PathBuf, CodeGenError> {
+    /// Build the full file path to the file given as a parameter
+    pub fn file_path(&self, name: &SharedStr) -> Result<PathBuf, Error> {
         let file = self.file(name)?;
         let base_path = self.general.base_path.as_os_str();
 
@@ -250,7 +254,7 @@ impl Config {
     }
 
     #[inline]
-    fn convert_vars(vars: &Vars) -> Result<TokenVars, CodeGenError> {
+    fn convert_vars(vars: &Vars) -> Result<TokenVars, Error> {
         vars.iter()
             .map(|(key, value)| match value.to_token_item() {
                 Ok(value) => Ok((key.clone(), value)),
@@ -260,41 +264,43 @@ impl Config {
     }
 
     #[inline]
-    fn general_vars(&self) -> Result<TokenVars, CodeGenError> {
+    fn general_vars(&self) -> Result<TokenVars, Error> {
         Self::convert_vars(&self.general.vars)
     }
 
     #[inline]
-    fn file_vars(&self, name: &SharedStr) -> Result<TokenVars, CodeGenError> {
+    fn file_vars(&self, name: &SharedStr) -> Result<TokenVars, Error> {
         Self::convert_vars(&self.file(name)?.vars)
     }
 
+    /// Return the complete vars for the file name given as a parameter
     #[inline]
-    pub fn vars(&self, name: &SharedStr) -> Result<TokenVars, CodeGenError> {
+    pub fn vars(&self, name: &SharedStr) -> Result<TokenVars, Error> {
         let mut vars = self.general_vars()?;
         vars.extend(self.file_vars(name)?);
         Ok(vars)
     }
 
+    /// Return the given named fragment list
     #[inline]
-    pub fn fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, CodeGenError> {
+    pub fn fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, Error> {
         self.fragment_lists.fragment_list(name)
     }
 
+    /// Return the fragment list used by the file given a parameter
     #[inline]
-    pub fn file_fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, CodeGenError> {
+    pub fn file_fragment_list(&self, name: &SharedStr) -> Result<&Vec<FragmentItem>, Error> {
         let name = &self.file(name)?.fragment_list;
         self.fragment_list(name)
     }
 
+    /// Return all the fragment exceptions for the given file
     #[inline]
-    pub fn file_fragment_exceptions(
-        &self,
-        name: &SharedStr,
-    ) -> Result<&Vec<SharedStr>, CodeGenError> {
+    pub fn file_fragment_exceptions(&self, name: &SharedStr) -> Result<&Vec<SharedStr>, Error> {
         Ok(&self.file(name)?.fragment_list_exceptions)
     }
 
+    /// Return a [RustFmt](rust_format::RustFmt) instance configured as specified in this configuration
     #[inline]
     pub fn build_rust_fmt(&self) -> Option<rust_format::RustFmt> {
         self.general.build_rust_fmt()

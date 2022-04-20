@@ -1,6 +1,6 @@
 use flexgen::config::Config;
 use flexgen::var::TokenVars;
-use flexgen::{import_vars, register_fragments, CodeFragment, CodeGenError, CodeGenerator};
+use flexgen::{import_vars, register_fragments, CodeFragment, CodeGenerator, Error};
 use proc_macro2::TokenStream;
 use quote::quote;
 use quote_doctest::doc_test;
@@ -8,7 +8,7 @@ use quote_doctest::doc_test;
 struct DocTest;
 
 impl CodeFragment for DocTest {
-    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, Error> {
         import_vars! { vars => fib, one };
 
         let test = quote! {
@@ -23,7 +23,7 @@ impl CodeFragment for DocTest {
 struct Function;
 
 impl CodeFragment for Function {
-    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, Error> {
         import_vars! { vars => fib, one };
 
         let doc_test = DocTest.generate(vars)?;
@@ -46,14 +46,14 @@ impl CodeFragment for Function {
 struct Main;
 
 impl CodeFragment for Main {
-    fn uses(&self, _vars: &TokenVars) -> Option<TokenStream> {
-        Some(quote! {
+    fn uses(&self, _vars: &TokenVars) -> Result<TokenStream, Error> {
+        Ok(quote! {
             use std::error::{Error as StdError};
             use std::io::stdin;
         })
     }
 
-    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, Error> {
         import_vars! { vars => fib };
 
         Ok(quote! {
@@ -76,7 +76,7 @@ impl CodeFragment for Main {
     }
 }
 
-fn main() -> Result<(), CodeGenError> {
+fn main() -> Result<(), Error> {
     let fragments = register_fragments!(Function, Main);
     let config = Config::from_default_toml_file()?;
     let gen = CodeGenerator::new(fragments, config)?;

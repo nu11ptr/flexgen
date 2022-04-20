@@ -6,14 +6,15 @@ use flexstr::{shared_str, SharedStr, ToSharedStr};
 use proc_macro2::TokenStream;
 use quote::ToTokens;
 
-use crate::CodeGenError;
+use crate::Error;
 
 const IDENT: &str = "$ident$";
 const INT_LIT: &str = "$int_lit$";
 
 /// A hashmap of variables for interpolation into [CodeFragments]
-pub type Vars = HashMap<SharedStr, VarItem>;
+pub(crate) type Vars = HashMap<SharedStr, VarItem>;
 
+/// Represents a map of variables ready for interpolation
 pub type TokenVars = HashMap<SharedStr, TokenItem>;
 
 // *** Expand Vars ***
@@ -23,16 +24,17 @@ pub type TokenVars = HashMap<SharedStr, TokenItem>;
 pub fn import_var<'vars>(
     vars: &'vars TokenVars,
     var: &'static str,
-) -> Result<&'vars TokenValue, CodeGenError> {
+) -> Result<&'vars TokenValue, Error> {
     let var = shared_str!(var);
-    let value = vars.get(&var).ok_or(CodeGenError::MissingVar(var))?;
+    let value = vars.get(&var).ok_or(Error::MissingVar(var))?;
 
     match value {
         TokenItem::Single(value) => Ok(value),
-        TokenItem::List(_) => Err(CodeGenError::WrongItem),
+        TokenItem::List(_) => Err(Error::WrongItem),
     }
 }
 
+/// Import the variables from the [Config](crate::config::Config) into local variables that can be interpolated with `quote`
 #[macro_export]
 macro_rules! import_vars {
     // Allow trailing comma
@@ -49,16 +51,17 @@ macro_rules! import_vars {
 pub fn import_list<'vars>(
     vars: &'vars TokenVars,
     var: &'static str,
-) -> Result<&'vars [TokenValue], CodeGenError> {
+) -> Result<&'vars [TokenValue], Error> {
     let var = shared_str!(var);
-    let value = vars.get(&var).ok_or(CodeGenError::MissingVar(var))?;
+    let value = vars.get(&var).ok_or(Error::MissingVar(var))?;
 
     match value {
         TokenItem::List(value) => Ok(value),
-        TokenItem::Single(_) => Err(CodeGenError::WrongItem),
+        TokenItem::Single(_) => Err(Error::WrongItem),
     }
 }
 
+/// Import the list of variables from the [Config](crate::config::Config) into local bindings that can be interpolated with `quote`
 #[macro_export]
 macro_rules! import_lists {
     // Allow trailing comma
@@ -73,13 +76,13 @@ macro_rules! import_lists {
 // *** CodeValue ***
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum CodeValue {
+pub(crate) enum CodeValue {
     Ident(SharedStr),
     IntLit(SharedStr),
 }
 
 impl FromStr for CodeValue {
-    type Err = CodeGenError;
+    type Err = Error;
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -88,7 +91,7 @@ impl FromStr for CodeValue {
         } else if matches!(s.find(INT_LIT), Some(idx) if idx == 0) {
             Ok(CodeValue::IntLit(s[INT_LIT.len()..].to_shared_str()))
         } else {
-            Err(CodeGenError::NotCodeItem(s.to_shared_str()))
+            Err(Error::NotCodeItem(s.to_shared_str()))
         }
     }
 }
@@ -131,15 +134,18 @@ impl<'de> serde::de::Deserialize<'de> for CodeValue {
 
 // *** CodeTokenValue ***
 
+/// A single code-related token variable from the [Config](crate::config::Config)
 #[derive(Clone, Debug, PartialEq)]
 pub enum CodeTokenValue {
+    /// An identifier
     Ident(syn::Ident),
+    /// An integer literal
     IntLit(syn::LitInt),
 }
 
 impl CodeTokenValue {
     #[inline]
-    pub fn new(item: &CodeValue) -> Result<Self, CodeGenError> {
+    pub(crate) fn new(item: &CodeValue) -> Result<Self, Error> {
         match item {
             CodeValue::Ident(i) => Ok(CodeTokenValue::Ident(syn::parse_str::<syn::Ident>(i)?)),
             CodeValue::IntLit(i) => Ok(CodeTokenValue::IntLit(syn::parse_str::<syn::LitInt>(i)?)),
@@ -171,20 +177,20 @@ impl ToTokens for CodeTokenValue {
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq)]
 #[serde(untagged)]
-pub enum VarItem {
+pub(crate) enum VarItem {
     List(Vec<VarValue>),
     Single(VarValue),
 }
 
 impl VarItem {
     #[inline]
-    pub fn to_token_item(&self) -> Result<TokenItem, CodeGenError> {
+    pub fn to_token_item(&self) -> Result<TokenItem, Error> {
         match self {
             VarItem::List(l) => {
                 let items: Vec<_> = l
                     .iter()
                     .map(|item| item.to_token_value())
-                    .collect::<Result<Vec<TokenValue>, CodeGenError>>()?;
+                    .collect::<Result<Vec<TokenValue>, Error>>()?;
                 Ok(TokenItem::List(items))
             }
             VarItem::Single(s) => Ok(TokenItem::Single(s.to_token_value()?)),
@@ -196,7 +202,7 @@ impl VarItem {
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq)]
 #[serde(untagged)]
-pub enum VarValue {
+pub(crate) enum VarValue {
     Number(i64),
     Bool(bool),
     CodeValue(CodeValue),
@@ -205,7 +211,7 @@ pub enum VarValue {
 
 impl VarValue {
     #[inline]
-    fn to_token_value(&self) -> Result<TokenValue, CodeGenError> {
+    fn to_token_value(&self) -> Result<TokenValue, Error> {
         Ok(match self {
             VarValue::Number(n) => TokenValue::Number(*n),
             VarValue::Bool(b) => TokenValue::Bool(*b),
@@ -217,19 +223,27 @@ impl VarValue {
 
 // *** TokenItem ***
 
+/// Represents either a list of variables or a single variable from the [Config](crate::config::Config)
 #[derive(Clone, Debug, PartialEq)]
 pub enum TokenItem {
+    /// A list of values
     List(Vec<TokenValue>),
+    /// A single value
     Single(TokenValue),
 }
 
 // *** TokenValue ***
 
+/// A single variable from the [Config](crate::config::Config)
 #[derive(Clone, Debug, PartialEq)]
 pub enum TokenValue {
+    /// A numeric value
     Number(i64),
+    /// A boolean value
     Bool(bool),
+    /// A code token value
     CodeValue(CodeTokenValue),
+    /// A string value
     String(SharedStr),
 }
 

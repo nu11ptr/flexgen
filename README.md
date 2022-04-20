@@ -1,5 +1,8 @@
 # flexgen
 
+[![Crate](https://img.shields.io/crates/v/flexgen)](https://crates.io/crates/flexgen)
+[![Docs](https://docs.rs/flexgen/badge.svg)](https://docs.rs/flexgen)
+
 A flexible, yet simple quote-based code generator for creating beautiful Rust code
 
 ## Why?
@@ -49,7 +52,7 @@ To run yourself:
 
 ```toml
 [dependencies]
-flexgen = "0.2"
+flexgen = "0.3"
 ```
 
 3. Edit your `main.rs` and add in one or more code fragments implementing 
