@@ -178,10 +178,9 @@ impl fmt::Display for CodeTokenValue {
             CodeTokenValue::Ident(i) => <syn::Ident as fmt::Display>::fmt(i, f),
             CodeTokenValue::IntLit(i) => <syn::LitInt as fmt::Display>::fmt(i, f),
             CodeTokenValue::Type(t) => {
-                // Doesn't implement Display, so we get creative - this might not always produce
-                // workable results for types made up of multiple tokens, however
-                let tokens = t.to_token_stream();
-                <TokenStream as fmt::Display>::fmt(&tokens, f)
+                // Doesn't implement Display, so we get creative
+                let type_str = t.to_token_stream().to_string().replace(" ", "");
+                write!(f, "{type_str}")
             }
         }
     }
@@ -298,7 +297,7 @@ impl ToTokens for TokenValue {
 
 #[cfg(test)]
 mod tests {
-    use crate::var::CodeValue;
+    use crate::var::{CodeTokenValue, CodeValue};
     use flexstr::shared_str;
     use std::str::FromStr;
 
@@ -316,5 +315,12 @@ mod tests {
             CodeValue::from_str("$int_lit$123").unwrap(),
             CodeValue::IntLit(shared_str!("123"))
         );
+    }
+
+    #[test]
+    fn code_token_value_display() {
+        let s = "alloc::sync::Arc";
+        let value = CodeTokenValue::Type(syn::parse_str(s).unwrap());
+        assert_eq!(s, value.to_string());
     }
 }
