@@ -76,6 +76,15 @@ macro_rules! import_lists {
 
 // *** CodeValue ***
 
+#[inline]
+fn strip_prefix(s: &str, prefix: &str) -> Option<SharedStr> {
+    if matches!(s.find(prefix), Some(idx) if idx == 0) {
+        Some(s[prefix.len()..].to_shared_str())
+    } else {
+        None
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum CodeValue {
     Ident(SharedStr),
@@ -88,12 +97,12 @@ impl FromStr for CodeValue {
 
     #[inline]
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if matches!(s.find(IDENT), Some(idx) if idx == 0) {
-            Ok(CodeValue::Ident(s[IDENT.len()..].to_shared_str()))
-        } else if matches!(s.find(INT_LIT), Some(idx) if idx == 0) {
-            Ok(CodeValue::IntLit(s[INT_LIT.len()..].to_shared_str()))
-        } else if matches!(s.find(TYPE), Some(idx) if idx == 0) {
-            Ok(CodeValue::Type(s[TYPE.len()..].to_shared_str()))
+        if let Some(s) = strip_prefix(s, IDENT) {
+            Ok(CodeValue::Ident(s))
+        } else if let Some(s) = strip_prefix(s, INT_LIT) {
+            Ok(CodeValue::IntLit(s))
+        } else if let Some(s) = strip_prefix(s, TYPE) {
+            Ok(CodeValue::Type(s))
         } else {
             Err(Error::NotCodeItem(s.to_shared_str()))
         }
@@ -146,7 +155,7 @@ pub enum CodeTokenValue {
     /// An integer literal
     IntLit(syn::LitInt),
     /// A type
-    Type(syn::Type),
+    Type(Box<syn::Type>),
 }
 
 impl CodeTokenValue {
@@ -155,7 +164,9 @@ impl CodeTokenValue {
         match item {
             CodeValue::Ident(i) => Ok(CodeTokenValue::Ident(syn::parse_str::<syn::Ident>(i)?)),
             CodeValue::IntLit(i) => Ok(CodeTokenValue::IntLit(syn::parse_str::<syn::LitInt>(i)?)),
-            CodeValue::Type(t) => Ok(CodeTokenValue::Type(syn::parse_str::<syn::Type>(t)?)),
+            CodeValue::Type(t) => Ok(CodeTokenValue::Type(Box::new(syn::parse_str::<syn::Type>(
+                t,
+            )?))),
         }
     }
 }
@@ -277,5 +288,28 @@ impl ToTokens for TokenValue {
             TokenValue::Number(n) => n.to_tokens(tokens),
             TokenValue::Bool(b) => b.to_tokens(tokens),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::var::CodeValue;
+    use flexstr::shared_str;
+    use std::str::FromStr;
+
+    #[test]
+    fn code_value_from_str() {
+        assert_eq!(
+            CodeValue::from_str("$type$str").unwrap(),
+            CodeValue::Type(shared_str!("str"))
+        );
+        assert_eq!(
+            CodeValue::from_str("$ident$str").unwrap(),
+            CodeValue::Ident(shared_str!("str"))
+        );
+        assert_eq!(
+            CodeValue::from_str("$int_lit$123").unwrap(),
+            CodeValue::IntLit(shared_str!("123"))
+        );
     }
 }
