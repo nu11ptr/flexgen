@@ -10,6 +10,7 @@ use crate::Error;
 
 const IDENT: &str = "$ident$";
 const INT_LIT: &str = "$int_lit$";
+const TYPE: &str = "$type$";
 
 /// A hashmap of variables for interpolation into [CodeFragments]
 pub(crate) type Vars = HashMap<SharedStr, VarItem>;
@@ -79,6 +80,7 @@ macro_rules! import_lists {
 pub(crate) enum CodeValue {
     Ident(SharedStr),
     IntLit(SharedStr),
+    Type(SharedStr),
 }
 
 impl FromStr for CodeValue {
@@ -90,6 +92,8 @@ impl FromStr for CodeValue {
             Ok(CodeValue::Ident(s[IDENT.len()..].to_shared_str()))
         } else if matches!(s.find(INT_LIT), Some(idx) if idx == 0) {
             Ok(CodeValue::IntLit(s[INT_LIT.len()..].to_shared_str()))
+        } else if matches!(s.find(TYPE), Some(idx) if idx == 0) {
+            Ok(CodeValue::Type(s[TYPE.len()..].to_shared_str()))
         } else {
             Err(Error::NotCodeItem(s.to_shared_str()))
         }
@@ -141,6 +145,8 @@ pub enum CodeTokenValue {
     Ident(syn::Ident),
     /// An integer literal
     IntLit(syn::LitInt),
+    /// A type
+    Type(syn::Type),
 }
 
 impl CodeTokenValue {
@@ -149,6 +155,7 @@ impl CodeTokenValue {
         match item {
             CodeValue::Ident(i) => Ok(CodeTokenValue::Ident(syn::parse_str::<syn::Ident>(i)?)),
             CodeValue::IntLit(i) => Ok(CodeTokenValue::IntLit(syn::parse_str::<syn::LitInt>(i)?)),
+            CodeValue::Type(t) => Ok(CodeTokenValue::Type(syn::parse_str::<syn::Type>(t)?)),
         }
     }
 }
@@ -159,6 +166,7 @@ impl fmt::Display for CodeTokenValue {
         match self {
             CodeTokenValue::Ident(i) => <syn::Ident as fmt::Display>::fmt(i, f),
             CodeTokenValue::IntLit(i) => <syn::LitInt as fmt::Display>::fmt(i, f),
+            CodeTokenValue::Type(t) => <syn::Type as fmt::Debug>::fmt(t, f),
         }
     }
 }
@@ -169,6 +177,7 @@ impl ToTokens for CodeTokenValue {
         match self {
             CodeTokenValue::Ident(ident) => ident.to_tokens(tokens),
             CodeTokenValue::IntLit(lit) => lit.to_tokens(tokens),
+            CodeTokenValue::Type(t) => t.to_tokens(tokens),
         }
     }
 }

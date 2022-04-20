@@ -64,13 +64,13 @@ for more details.
 // main.rs
 
 use flexgen::var::TokenVars;
-use flexgen::{import_vars, CodeFragment, CodeGenError};
+use flexgen::{import_vars, CodeFragment, Error};
 use quote::quote;
 
 struct HelloWorld;
 
 impl CodeFragment for HelloWorld {
-    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, CodeGenError> {
+    fn generate(&self, vars: &TokenVars) -> Result<TokenStream, Error> {
         import_vars! { vars => hello };
 
         Ok(quote! {
@@ -107,9 +107,9 @@ hello = "Hello"
 // main.rs
 
 use flexgen::config::Config;
-use flexgen::{register_fragments, CodeGenError, CodeGenerator};
+use flexgen::{register_fragments, Error, CodeGenerator};
 
-fn main() -> Result<(), CodeGenError> {
+fn main() -> Result<(), Error> {
     // Register all your code fragments
     let fragments = register_fragments!(HelloWorld);
     // Read in the configuration from our flexgen.toml file

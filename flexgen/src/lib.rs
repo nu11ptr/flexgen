@@ -48,7 +48,7 @@ macro_rules! register_fragments {
     };
 }
 
-// *** CodeGenError ***
+// *** Error ***
 
 /// This error will be returned if any issues arise during the code generation process
 #[derive(Debug, thiserror::Error)]
