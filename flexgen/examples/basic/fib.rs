@@ -1,7 +1,7 @@
-//
-// WARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).
-// Any manual modifications to this file will be overwritten the next time this file is generated.
-//
+// +-------------------------------------------------------------------------------------------------+
+// | WARNING: This file has been auto-generated using FlexGen (https://github.com/nu11ptr/flexgen).  |
+// | Any manual modifications to this file will be overwritten the next time this file is generated. |
+// +-------------------------------------------------------------------------------------------------+
 
 use std::error::Error as StdError;
 use std::io::stdin;

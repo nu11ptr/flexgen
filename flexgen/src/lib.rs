@@ -148,8 +148,10 @@ impl<'exec> FileGenerator<'exec> {
     ) -> Result<String, Error> {
         // Would be nice to make this a constant, but _comment_! marker needs a literal
         let comment = quote! {
-            _comment_!("\nWARNING: This file has been auto-generated using flexgen (https://github.com/nu11ptr/flexgen).");
-            _comment_!("Any manual modifications to this file will be overwritten the next time this file is generated.\n\n");
+            _comment_!("+-------------------------------------------------------------------------------------------------+");
+            _comment_!("| WARNING: This file has been auto-generated using FlexGen (https://github.com/nu11ptr/flexgen).  |");
+            _comment_!("| Any manual modifications to this file will be overwritten the next time this file is generated. |");
+            _comment_!("+-------------------------------------------------------------------------------------------------+");
         };
 
         let builder = UseBuilder::from_uses(uses);
