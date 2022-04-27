@@ -79,8 +79,12 @@ const RUST_FMT_KEY: &str = "RUSTFMT";
 #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
 #[macro_export]
 macro_rules! _blank_ {
-    () => {};
-    ($lit:literal) => {};
+    () => {
+        ::core::compile_error!("The _blank_ macro is not meant to be invoked in code")
+    };
+    ($lit:literal) => {
+        $crate::_blank_! {}
+    };
 }
 
 /// A "marker" macro used to mark locations in the source code where comments should be inserted.
@@ -98,8 +102,12 @@ macro_rules! _blank_ {
 #[cfg_attr(docsrs, doc(cfg(feature = "post_process")))]
 #[macro_export]
 macro_rules! _comment_ {
-    () => {};
-    ($lit:literal) => {};
+    () => {
+        ::core::compile_error!("The _comment_ macro is not meant to be invoked in code")
+    };
+    ($lit:literal) => {
+        $crate::_comment_! {}
+    };
 }
 
 // *** Error ***
