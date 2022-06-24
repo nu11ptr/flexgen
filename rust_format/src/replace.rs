@@ -1,6 +1,7 @@
 #![cfg(feature = "post_process")]
 
 use std::borrow::Cow;
+use std::iter::Peekable;
 use std::{cmp, slice};
 
 use crate::Error;
@@ -16,6 +17,7 @@ const DOC_BLOCK_END: &[&[u8]] = &[b"]"];
 const EMPTY_COMMENT: &str = "//";
 const COMMENT: &str = "// ";
 const DOC_COMMENT: &str = "///";
+const MODULE_LEVEL_DOC_COMMENT: &str = "//!";
 const LF_STR: &str = "\n";
 const CRLF_STR: &str = "\r\n";
 
@@ -45,7 +47,7 @@ struct CopyingCursor<'a> {
 
     // We can iterate as if this were raw bytes since we are only matching ASCII. We preserve
     // any unicode, however, and copy it verbatim
-    iter: slice::Iter<'a, u8>,
+    iter: Peekable<slice::Iter<'a, u8>>,
     source: &'a str,
     buffer: String,
 }
@@ -54,7 +56,7 @@ impl<'a> CopyingCursor<'a> {
     fn new(source: &'a str) -> Option<Self> {
         // Better to be too large than not large enough
         let buffer = String::with_capacity(cmp::max(source.len() * 2, MIN_BUFF_SIZE));
-        let mut iter = source.as_bytes().iter();
+        let mut iter = source.as_bytes().iter().peekable();
 
         iter.next().map(|&ch| Self {
             start_idx: 0,
@@ -73,6 +75,12 @@ impl<'a> CopyingCursor<'a> {
             self.curr = ch;
             ch
         })
+    }
+
+    // Returns next character without advancing cursor
+    #[inline]
+    fn peek(&mut self) -> Option<u8> {
+        self.iter.peek().map(|&&c| c)
     }
 
     #[inline]
@@ -421,11 +429,12 @@ impl<'a> CopyingCursor<'a> {
         buffer: &mut String,
         s: &str,
         ending: &str,
+        comment_prefix: &str,
     ) -> Result<(), Error> {
         // Single blank comment
         if s.is_empty() {
             Self::push_spaces(spaces, buffer);
-            buffer.push_str(DOC_COMMENT);
+            buffer.push_str(comment_prefix);
             buffer.push_str(ending);
         // Multiple comments
         } else {
@@ -435,12 +444,12 @@ impl<'a> CopyingCursor<'a> {
             // Blank comment after parsing
             if comment.is_empty() {
                 Self::push_spaces(spaces, buffer);
-                buffer.push_str(DOC_COMMENT);
+                buffer.push_str(comment_prefix);
                 buffer.push_str(ending);
             } else {
                 for line in comment.lines() {
                     Self::push_spaces(spaces, buffer);
-                    buffer.push_str(DOC_COMMENT);
+                    buffer.push_str(comment_prefix);
                     buffer.push_str(line);
                     buffer.push_str(ending);
                 }
@@ -564,21 +573,57 @@ impl<'a> CopyingCursor<'a> {
     }
 
     fn try_replace_doc_block(&mut self, spaces: usize) -> Result<bool, Error> {
+        // First we need to figure out if it's a regualr attribute or module-level attribute:
+        // # [ doc = "my doc" ]
+        // vs
+        // # ! [ doc = "my doc" ]
+
+        let mut chars_matched = 1;
+
+        // Discard all whitespaces
+        while let Some(c) = self.peek() {
+            if !Self::is_whitespace(c) {
+                break;
+            }
+            self.next();
+            chars_matched += 1;
+        }
+
+        // Check if first non-whitespace character is '!'
+        // If it is, we are dealing with module-level attribute, otherwise it's a regular attribute
+        // We discard '!' after check is done
+        let is_module_level = if self.peek() == Some(b'!') {
+            // if we found ! then it's a module-level doc attribute;
+            self.next();
+            chars_matched += 1;
+            true
+        } else {
+            false
+        };
+
         // 7 sections to match: # [ doc = <string> ] CRLF|LF
 
-        match self.try_match_prefixes(spaces, 1, DOC_BLOCK_START, true) {
+        match self.try_match_prefixes(spaces, chars_matched, DOC_BLOCK_START, true) {
             Some((ident_start, value_start)) => {
                 // Make sure it is a string
                 match self.try_skip_string()? {
                     // String
                     None => {
+                        let comment_prefix = if is_module_level {
+                            MODULE_LEVEL_DOC_COMMENT
+                        } else {
+                            DOC_COMMENT
+                        };
+
                         self.try_replace(
                             spaces,
                             0,
                             DOC_BLOCK_END,
                             ident_start,
                             value_start,
-                            CopyingCursor::process_doc_block,
+                            |spaces, buffer, s, ending| {
+                                Self::process_doc_block(spaces, buffer, s, ending, comment_prefix)
+                            },
                         )?;
                         Ok(true)
                     }
@@ -864,6 +909,35 @@ fn main() {
 fn test() {
 }
 _blank!_;
+"####;
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn replace_doc_blocks_top_level() {
+        let source = r####"
+#![doc = r#" top"#]
+#![doc = r#" level"#]
+#![doc = r#" doc"#]
+
+# !   [
+doc
+ = 
+ " this is\n\n three doc comments"
+ 
+ ]
+"####;
+
+        let actual = replace_markers(source, true).unwrap();
+        let expected = r####"
+//! top
+//! level
+//! doc
+
+//! this is
+//!
+//! three doc comments
 "####;
 
         assert_eq!(expected, actual);
